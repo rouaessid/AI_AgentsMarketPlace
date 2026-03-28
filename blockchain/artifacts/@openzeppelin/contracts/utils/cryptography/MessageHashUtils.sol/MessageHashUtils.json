@@ -1,0 +1,16 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "MessageHashUtils",
+  "sourceName": "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol",
+  "abi": [
+    {
+      "inputs": [],
+      "name": "ERC5267ExtensionsNotSupported",
+      "type": "error"
+    }
+  ],
+  "bytecode": "0x6080806040523460175760399081601c823930815050f35b5f80fdfe5f80fdfea2646970667358221220bc0c9990c9f61523cf65e65218b3204fa0d3ccd05c45d36dcd2d220a6cf40fe664736f6c63430008190033",
+  "deployedBytecode": "0x5f80fdfea2646970667358221220bc0c9990c9f61523cf65e65218b3204fa0d3ccd05c45d36dcd2d220a6cf40fe664736f6c63430008190033",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}

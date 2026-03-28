@@ -1,0 +1,23 @@
+# Web framework
+fastapi
+uvicorn
+
+# Blockchain
+web3
+
+# IA
+google-genai
+
+# Recherche
+requests
+
+# Utils
+python-dotenv
+
+
+supabase
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+pydantic
+
