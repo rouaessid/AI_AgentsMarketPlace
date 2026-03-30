@@ -21,3 +21,8 @@ passlib[bcrypt]
 python-multipart
 pydantic
 
+pydantic-settings
+
+aiofiles
+httpx
+pyngrok
