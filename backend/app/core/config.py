@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False
+        env_file="../.env", env_file_encoding="utf-8", case_sensitive=False
     )
 
     app_name:    str  = "AgentMarket API"
@@ -30,9 +30,15 @@ class Settings(BaseSettings):
     sandbox_network:  str = "none"
     sandbox_work_dir: str = "/tmp/agentmarket/sandbox"
 
-    ngrok_authtoken: str = ""
-    ngrok_base_url:  str = ""
-    backend_port:    int = 8000
+    # Tunnel public
+    tunnel_provider:  str = "cloudflare"
+    tunnel_base_url:  str = ""
+
+    # Ngrok legacy
+    ngrok_authtoken:  str = ""
+    ngrok_base_url:   str = ""
+
+    backend_port:     int = 8000
 
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 

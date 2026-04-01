@@ -38,6 +38,7 @@ class AgentRegistrationFile(BaseModel):
     description:    str
     image:          str | None = None
     version:        str = Field("1.0.0", pattern=r"^\d+\.\d+\.\d+$")
+    readme:         str | None = None
     services:       list[ServiceEndpoint]        = Field(default_factory=list)
     x402Support:    bool                         = False
     active:         bool                         = True
@@ -46,42 +47,68 @@ class AgentRegistrationFile(BaseModel):
     agent_type:     str | None                   = None
     capabilities:   dict[str, Any]               = Field(default_factory=dict)
     sandbox_config: dict[str, Any]               = Field(default_factory=dict)
+    pricing:        dict[str, Any]               = Field(default_factory=dict)
+    stake_amount:   float                        = 0.0
     created_at:     str | None                   = None
     updated_at:     str | None                   = None
 
 
 class AgentSubmitRequest(BaseModel):
-    agent_id:        str = Field(..., min_length=3, max_length=64,
-                                 pattern=r"^[a-z0-9][a-z0-9\-]*[a-z0-9]$")
+    agent_id:        str = Field(
+        ..., min_length=3, max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9\-]*[a-z0-9]$",
+        description="Identifiant unique ex: search-1"
+    )
     name:            str = Field(..., min_length=3, max_length=128)
     description:     str = Field(..., min_length=10, max_length=2048)
     version:         str = Field("1.0.0", pattern=r"^\d+\.\d+\.\d+$")
     agent_type:      AgentType = AgentType.PROVIDER
     image_url:       str | None = None
-    owner_address:   str = Field(..., pattern=r"^0x[a-fA-F0-9]{40}$")
+    readme:          str | None = Field(
+        None,
+        description="README markdown : instructions, exemples, format output"
+    )
+    owner_address:   str = Field(
+        ..., pattern=r"^0x[a-fA-F0-9]{40}$",
+        description="Wallet connecte — fourni par le frontend automatiquement"
+    )
     services:        list[ServiceEndpoint] = Field(default_factory=list)
-    supported_trust: list[str] = Field(default_factory=lambda: ["reputation", "crypto-economic"])
+    supported_trust: list[str] = Field(
+        default_factory=lambda: ["reputation", "crypto-economic"]
+    )
     x402_support:    bool = False
-    llm_model:       str  = "gpt-4o"
-    framework:       str  = "langchain"
-    language:        str  = "python"
-    max_tokens:      int  = Field(8192, ge=256, le=128000)
+    llm_model:       str       = "llama-3.3-70b"
+    framework:       str       = "raw_api"
+    language:        str       = "python"
+    max_tokens:      int       = Field(8192, ge=256, le=128000)
     supported_tasks: list[str] = Field(default_factory=list)
     special_caps:    list[str] = Field(default_factory=list)
-    price_per_task:  float     = Field(0.05, ge=0.0)
-    runtime:         str  = "python:3.11"
-    entrypoint:      str  = "main.py"
-    cpu_limit:       int  = Field(1, ge=1, le=8)
-    ram_limit_mb:    int  = Field(512, ge=128, le=8192)
-    timeout_sec:     int  = Field(60, ge=5, le=600)
-    env_var_keys:    list[str] = Field(default_factory=list)
-    manifest_schema: str  = "default_v1"
+    docker_image:    str = Field(
+        ...,
+        description="Image Docker Hub ex: username/my-agent:v1"
+    )
+    env_var_keys:    list[str] = Field(
+        default_factory=list,
+        description="Noms des vars d'env requises ex: ['GROQ_API_KEY', 'TAVILY_API_KEY']"
+    )
+    cpu_limit:       int   = Field(1, ge=1, le=8)
+    ram_limit_mb:    int   = Field(512, ge=128, le=8192)
+    timeout_sec:     int   = Field(60, ge=5, le=600)
+    price_per_task:       float = Field(0.10, ge=0.0, description="USDC par appel")
+    access_duration_days: int   = Field(30, ge=1, description="Duree acces en jours")
+    max_calls_per_day:    int   = Field(100, ge=1, description="Appels max par jour")
+    stake_amount:    float = Field(
+        0.5, ge=0.0,
+        description="ETH a staker — StakingContract Phase 2"
+    )
 
 
 class AgentNewVersionRequest(BaseModel):
     agent_id:      str
     owner_address: str = Field(..., pattern=r"^0x[a-fA-F0-9]{40}$")
     new_version:   str = Field(..., pattern=r"^\d+\.\d+\.\d+$")
+    docker_image:  str = Field(..., description="Nouvelle image ex: username/agent:v2")
+    readme:        str | None = None
     description:   str | None = None
     services:      list[ServiceEndpoint] | None = None
     capabilities:  dict[str, Any] | None = None
@@ -124,32 +151,44 @@ class AgentNewVersionResponse(BaseModel):
 
 
 class AgentVersionInfo(BaseModel):
-    token_id:  int
-    version:   str
-    agent_uri: str
-    minted_at: datetime | None = None
+    token_id:     int
+    version:      str
+    agent_uri:    str
+    docker_image: str | None = None
+    minted_at:    datetime | None = None
 
 
 class AgentRecord(BaseModel):
-    id:                str
-    agent_id:          str
-    current_token_id:  int | None
-    agent_registry:    str | None
-    name:              str
-    version:           str
-    agent_type:        AgentType
-    status:            AgentStatus
-    owner_address:     str
-    ipfs_cid:          str | None
-    agent_uri:         str | None
-    metadata_hash:     str | None
-    zip_path:          str | None
-    zip_hash:          str | None
-    platform_endpoint: str | None = None
-    tx_hash:           str | None
-    registered_at:     datetime | None
-    updated_at:        datetime
-    versions:          list[AgentVersionInfo] = Field(default_factory=list)
-    registration_file: AgentRegistrationFile | None = None
+    id:                   str
+    agent_id:             str
+    current_token_id:     int | None
+    agent_registry:       str | None
+    name:                 str
+    version:              str
+    agent_type:           AgentType
+    status:               AgentStatus
+    owner_address:        str
+    ipfs_cid:             str | None
+    agent_uri:            str | None
+    metadata_hash:        str | None
+    docker_image:         str | None = None
+    platform_endpoint:    str | None = None
+    stake_amount:         float      = 0.0
+    price_per_task:       float      = 0.0
+    access_duration_days: int        = 30
+    max_calls_per_day:    int        = 100
+    tx_hash:              str | None
+    registered_at:        datetime | None
+    updated_at:           datetime
+    versions:             list[AgentVersionInfo]       = Field(default_factory=list)
+    registration_file:    AgentRegistrationFile | None = None
 
     model_config = {"from_attributes": True}
+
+
+class RunRequest(BaseModel):
+    prompt: str = Field(..., description="La tache a executer")
+    params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Cles API requises ex: {'GROQ_API_KEY': '...', 'TAVILY_API_KEY': '...'}"
+    )
