@@ -1,4 +1,3 @@
-// scripts/deploy.js
 const { ethers, network } = require("hardhat");
 const fs   = require("fs");
 const path = require("path");
@@ -24,21 +23,27 @@ async function main() {
   console.log(`IdentityRegistry : ${address}`);
   console.log(`agentRegistry    : ${agentRegistry}`);
 
-  // Sauvegarder pour le backend
-  const outDir  = path.join(__dirname, "../artifacts");
-  fs.mkdirSync(outDir, { recursive: true });
+  // ── Sauvegarder dans deployments/ (jamais écrasé par Hardhat) ────────────
+  const deploymentsDir = path.join(__dirname, "../deployments");
+  fs.mkdirSync(deploymentsDir, { recursive: true });
 
   const deployment = {
-    network, chainId, deployedAt: new Date().toISOString(),
-    deployer: deployer.address,
-    contracts: { IdentityRegistry: { address, agentRegistry } },
+    network:     network.name,
+    chainId,
+    deployedAt:  new Date().toISOString(),
+    deployer:    deployer.address,
+    contracts: {
+      IdentityRegistry: { address, agentRegistry }
+    },
   };
+
   fs.writeFileSync(
-    path.join(outDir, "deployment.json"),
+    path.join(deploymentsDir, "deployment.json"),
     JSON.stringify(deployment, null, 2)
   );
+  console.log(`\nDeployment info → deployments/deployment.json`);
 
-  // Copier ABI
+  // ── Copier ABI dans deployments/ aussi ───────────────────────────────────
   const artifactPath = path.join(
     __dirname,
     "../artifacts/contracts/IdentityRegistry.sol/IdentityRegistry.json"
@@ -46,13 +51,12 @@ async function main() {
   if (fs.existsSync(artifactPath)) {
     const { abi } = JSON.parse(fs.readFileSync(artifactPath, "utf8"));
     fs.writeFileSync(
-      path.join(outDir, "IdentityRegistry.abi.json"),
+      path.join(deploymentsDir, "IdentityRegistry.abi.json"),
       JSON.stringify(abi, null, 2)
     );
-    console.log(`ABI saved → artifacts/IdentityRegistry.abi.json`);
+    console.log(`ABI saved → deployments/IdentityRegistry.abi.json`);
   }
 
-  console.log(`\nDeployment info → artifacts/deployment.json`);
   console.log(`\n→ Copier dans backend/.env :`);
   console.log(`  IDENTITY_REGISTRY_ADDRESS=${address}`);
   console.log(`  CHAIN_ID=${chainId}\n`);
