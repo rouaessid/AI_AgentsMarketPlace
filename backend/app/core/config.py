@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     platform_private_key:      str = ""
     platform_wallet_address:   str = ""
     staking_contract_address: str = "" 
+
     sandbox_backend:  str = "docker"
     sandbox_network:  str = "none"
     sandbox_work_dir: str = "/tmp/agentmarket/sandbox"
