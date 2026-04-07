@@ -4,10 +4,7 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import (
-    APIRouter, BackgroundTasks, Form,
-    HTTPException, Query,
-)
+from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from app.models.agent import (
@@ -43,25 +40,7 @@ def _http(exc: Exception) -> HTTPException:
     return HTTPException(500, detail=str(exc))
 
 
-# ─── Register ────────────────────────────────────────────────────────────────
-
-@router.post(
-    "/register",
-    response_model=AgentSubmitResponse,
-    status_code=201,
-    summary="Enregistrer un nouvel agent",
-    description="""
-Formulaire d'enregistrement d'un agent.
-
-Champs importants :
-- `docker_image` : image Docker Hub ex: username/agent:v1
-- `env_var_keys` : clés API requises (noms seulement) ex: ["GROQ_API_KEY"]
-- `readme` : instructions markdown pour le buyer
-- `stake_amount` : ETH a staker (Phase 2)
-- `price_per_task` : USDC par appel
-- `access_duration_days` : duree d'acces en jours
-""",
-)
+@router.post("/register", response_model=AgentSubmitResponse, status_code=201)
 async def register_agent(
     data: Annotated[str, Form(description="AgentSubmitRequest JSON")],
 ) -> AgentSubmitResponse:
@@ -75,33 +54,15 @@ async def register_agent(
         raise _http(e)
 
 
-@router.post(
-    "/confirm",
-    response_model=AgentRecord,
-    summary="Confirmer la transaction on-chain",
-    description="""
-Appele apres que le wallet a signe et broadcaste register().
-La plateforme :
-1. Resout le digest SHA256 de l'image Docker (immuable)
-2. Re-upload JSON IPFS avec registrations + digest
-3. Lie le tokenId NFT au record
-4. Enregistre l'endpoint dans endpoints.json (persistant)
-""",
-)
-async def confirm_onchain(
-    body: AgentOnChainConfirm,
-    bg:   BackgroundTasks,
-) -> AgentRecord:
+@router.post("/confirm", response_model=AgentRecord)
+async def confirm_onchain(body: AgentOnChainConfirm, bg: BackgroundTasks) -> AgentRecord:
     try:
-        record = await agent_svc.confirm(body)
+        return await agent_svc.confirm(body)
     except Exception as e:
         raise _http(e)
-    return record
 
 
-# ─── Dev ─────────────────────────────────────────────────────────────────────
-
-@router.delete("/reset", tags=["dev"], summary="Reset memoire (dev only)")
+@router.delete("/reset", tags=["dev"])
 async def reset_store() -> JSONResponse:
     from app.services.agent_service import _records, _agent_index
     _records.clear()
@@ -109,17 +70,8 @@ async def reset_store() -> JSONResponse:
     return JSONResponse({"message": "Store reset OK"})
 
 
-# ─── Versioning ───────────────────────────────────────────────────────────────
-
-@router.post(
-    "/{agent_id}/version",
-    response_model=AgentNewVersionResponse,
-    summary="Publier une nouvelle version",
-)
-async def new_version(
-    agent_id: str,
-    body:     AgentNewVersionRequest,
-) -> AgentNewVersionResponse:
+@router.post("/{agent_id}/version", response_model=AgentNewVersionResponse)
+async def new_version(agent_id: str, body: AgentNewVersionRequest) -> AgentNewVersionResponse:
     if body.agent_id != agent_id:
         raise HTTPException(400, detail="agent_id mismatch")
     try:
@@ -128,62 +80,47 @@ async def new_version(
         raise _http(e)
 
 
-# ─── Read ─────────────────────────────────────────────────────────────────────
-
-@router.get("/owner/{owner_address}", summary="Lister les agents d'un owner")
+@router.get("/owner/{owner_address}")
 async def list_by_owner(owner_address: str) -> JSONResponse:
     if not (owner_address.startswith("0x") and len(owner_address) == 42):
         raise HTTPException(400, detail="Adresse Ethereum invalide")
     records = await agent_svc.list_by_owner(owner_address)
-    return JSONResponse({
-        "agents": [r.model_dump(mode="json") for r in records],
-        "total":  len(records),
-    })
+    return JSONResponse({"agents": [r.model_dump(mode="json") for r in records], "total": len(records)})
 
 
-@router.get("", summary="Lister tous les agents")
-async def list_all(
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
-) -> JSONResponse:
+@router.get("")
+async def list_all(page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=100)) -> JSONResponse:
     records, total = await agent_svc.list_all(page, size)
-    return JSONResponse({
-        "agents": [r.model_dump(mode="json") for r in records],
-        "total":  total,
-        "page":   page,
-        "size":   size,
-    })
+    return JSONResponse({"agents": [r.model_dump(mode="json") for r in records],
+                         "total": total, "page": page, "size": size})
 
 
-@router.get("/{agent_id}/versions", summary="Historique des versions")
+@router.get("/{agent_id}/versions")
 async def get_versions(agent_id: str) -> JSONResponse:
     try:
         record = await agent_svc.get_by_agent_id(agent_id)
     except KeyError:
         raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
     return JSONResponse({
-        "agent_id":         agent_id,
-        "versions":         [v.model_dump(mode="json") for v in record.versions],
-        "total_versions":   len(record.versions),
+        "agent_id": agent_id,
+        "versions": [v.model_dump(mode="json") for v in record.versions],
+        "total_versions": len(record.versions),
         "current_token_id": record.current_token_id,
     })
 
 
-@router.get("/{agent_id}/endpoint", summary="Endpoint public de l'agent")
+@router.get("/{agent_id}/endpoint")
 async def get_endpoint(agent_id: str) -> JSONResponse:
     try:
         record = await agent_svc.get_by_agent_id(agent_id)
     except KeyError:
         raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
     endpoint = record.platform_endpoint or get_agent_endpoint(agent_id)
-    return JSONResponse({
-        "agent_id":          agent_id,
-        "platform_endpoint": endpoint,
-        "available":         endpoint is not None,
-    })
+    return JSONResponse({"agent_id": agent_id, "platform_endpoint": endpoint,
+                         "available": endpoint is not None})
 
 
-@router.get("/{agent_id}/readme", summary="README et instructions pour le buyer")
+@router.get("/{agent_id}/readme")
 async def get_readme(agent_id: str) -> JSONResponse:
     try:
         record = await agent_svc.get_by_agent_id(agent_id)
@@ -191,21 +128,17 @@ async def get_readme(agent_id: str) -> JSONResponse:
         raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
     rf = record.registration_file
     return JSONResponse({
-        "agent_id":    agent_id,
-        "name":        record.name,
-        "version":     record.version,
-        "readme":      rf.readme if rf else "Aucune documentation.",
+        "agent_id":     agent_id,
+        "name":         record.name,
+        "version":      record.version,
+        "readme":       rf.readme if rf else "Aucune documentation.",
         "env_var_keys": rf.capabilities.get("env_var_keys", []) if rf else [],
-        "pricing":     rf.pricing if rf else {},
-        "endpoint":    record.platform_endpoint or get_agent_endpoint(agent_id),
+        "pricing":      rf.pricing if rf else {},
+        "endpoint":     record.platform_endpoint or get_agent_endpoint(agent_id),
     })
 
 
-@router.get(
-    "/{agent_id}",
-    response_model=AgentRecord,
-    summary="Recuperer un agent par agentId",
-)
+@router.get("/{agent_id}", response_model=AgentRecord)
 async def get_agent(agent_id: str) -> AgentRecord:
     try:
         return await agent_svc.get_by_agent_id(agent_id)
@@ -213,16 +146,8 @@ async def get_agent(agent_id: str) -> AgentRecord:
         raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
 
 
-# ─── Sandbox ─────────────────────────────────────────────────────────────────
-
-@router.post(
-    "/{agent_id}/sandbox",
-    summary="Executer l'agent dans le sandbox (test plateforme)",
-)
-async def run_sandbox(
-    agent_id:    str,
-    task_prompt: str = Query("Test sandbox"),
-) -> JSONResponse:
+@router.post("/{agent_id}/sandbox")
+async def run_sandbox(agent_id: str, task_prompt: str = Query("Test sandbox")) -> JSONResponse:
     try:
         record = await agent_svc.get_by_agent_id(agent_id)
     except KeyError:
@@ -230,23 +155,16 @@ async def run_sandbox(
     try:
         manifest = await sandbox_svc.run_agent(
             record,
-            SandboxInput(
-                task_id=f"sandbox_{record.id[:8]}",
-                agent_id=agent_id,
-                task_prompt=task_prompt,
-            ),
+            SandboxInput(task_id=f"sandbox_{record.id[:8]}",
+                         agent_id=agent_id, task_prompt=task_prompt),
         )
     except Exception as e:
-        logger.exception("Sandbox error")
         raise HTTPException(500, detail=str(e))
     _manifests[manifest.run_id] = manifest.to_dict()
     return JSONResponse(manifest.to_dict())
 
 
-@router.get(
-    "/{agent_id}/sandbox/{run_id}",
-    summary="Recuperer un manifest d'execution",
-)
+@router.get("/{agent_id}/sandbox/{run_id}")
 async def get_manifest(agent_id: str, run_id: str) -> JSONResponse:
     if run_id not in _manifests:
         raise HTTPException(404, detail="Manifest introuvable")
@@ -255,34 +173,8 @@ async def get_manifest(agent_id: str, run_id: str) -> JSONResponse:
 
 # ─── Run public — buyer ───────────────────────────────────────────────────────
 
-@router.post(
-    "/{agent_id}/run",
-    summary="Executer l'agent — endpoint public buyer",
-    description="""
-Endpoint consomme par le buyer via l'URL cloudflare tunnel.
-
-Body :
-```json
-{
-  "prompt": "Analyse le marche crypto mars 2026",
-  "params": {
-    "GROQ_API_KEY":   "gsk_...",
-    "TAVILY_API_KEY": "tvly-..."
-  }
-}
-```
-
-- `prompt` : la tache a executer
-- `params` : les cles API requises declarees dans env_var_keys
-
-La plateforme verifie que toutes les cles sont presentes
-puis les injecte dans le container Docker isole.
-""",
-)
-async def run_agent_public(
-    agent_id: str,
-    body:     RunRequest,
-) -> JSONResponse:
+@router.post("/{agent_id}/run")
+async def run_agent_public(agent_id: str, body: RunRequest) -> JSONResponse:
     try:
         record = await agent_svc.get_by_agent_id(agent_id)
     except KeyError:
@@ -291,16 +183,48 @@ async def run_agent_public(
     if record.status.value != "active":
         raise HTTPException(403, detail=f"Agent '{agent_id}' non actif")
 
-    # Verifier que toutes les cles requises sont presentes
     rf            = record.registration_file
     required_keys = rf.sandbox_config.get("env_var_keys", []) if rf else []
     missing       = [k for k in required_keys if k not in body.params]
     if missing:
-        raise HTTPException(
-            400,
-            detail=f"Cles API manquantes dans params: {missing}. "
-                   f"Cles requises: {required_keys}"
-        )
+        raise HTTPException(400, detail=f"Cles API manquantes: {missing}. Requises: {required_keys}")
+
+    # ── Résoudre le digest frais à la volée ───────────────────────────────
+    # Évite exit_code 125 "image not found" après docker build --no-cache
+    docker_image = record.docker_image or ""
+    image_tag    = docker_image.split("@")[0] if "@" in docker_image else docker_image
+
+    if image_tag:
+        try:
+            fresh = await sandbox_svc.resolve_image_digest(image_tag)
+            if "@sha256:" in fresh and fresh != docker_image:
+                logger.warning("Digest obsolète %s → mise à jour automatique", agent_id)
+                from app.services.agent_service import _records, _agent_index
+                from app.db.agent_repo import upsert_agent
+                rid = _agent_index.get(agent_id)
+                if rid and rid in _records:
+                    _records[rid] = _records[rid].model_copy(
+                        update={"docker_image": fresh}
+                    )
+                upsert_agent(
+                    agent_id=record.agent_id, registration_id=record.id,
+                    token_id=record.current_token_id, tx_hash=record.tx_hash,
+                    docker_image=fresh, status=record.status.value,
+                    registered_at=record.registered_at.isoformat()
+                                  if record.registered_at else None,
+                    owner_address=record.owner_address,
+                )
+                record = record.model_copy(update={"docker_image": fresh})
+                logger.info("Digest mis à jour: %s", fresh[:70])
+            elif "@sha256:" not in fresh:
+                logger.warning(
+                    "Image '%s' non trouvée localement — "
+                    "le seller doit faire 'docker build -t %s .'",
+                    image_tag, image_tag
+                )
+        except Exception as e:
+            logger.warning("Résolution digest: %s", e)
+    # ── FIN ───────────────────────────────────────────────────────────────
 
     try:
         manifest = await sandbox_svc.run_agent(
@@ -329,17 +253,17 @@ async def run_agent_public(
         "manifest_hash": manifest.manifest_hash,
         "platform_sig":  manifest.platform_sig,
         "duration_sec":  manifest.duration_sec,
-        "endpoint":      f"{ngrok_url}/api/v1/agents/{agent_id}/run"
-                         if ngrok_url else None,
+        "error":         manifest.error,
+        "endpoint":      f"{ngrok_url}/api/v1/agents/{agent_id}/run" if ngrok_url else None,
+        "proxy_hash":    manifest.proxy_hash,
+        "proxy_cid":     manifest.proxy_cid,
+        "proxy_metrics": manifest.proxy_metrics,
     })
 
-
-# ─── Background ──────────────────────────────────────────────────────────────
 
 async def _bg_sandbox(record: AgentRecord, inp: SandboxInput) -> None:
     try:
         m = await sandbox_svc.run_agent(record, inp)
         _manifests[m.run_id] = m.to_dict()
-        logger.info("BG sandbox: %s status=%s", m.run_id, m.status)
     except Exception:
         logger.exception("BG sandbox failed for %s", record.agent_id)
