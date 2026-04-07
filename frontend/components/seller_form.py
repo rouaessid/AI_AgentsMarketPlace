@@ -5,11 +5,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
 from utils.api import register_agent, confirm_agent
-from utils.blockchain import sign_and_send
+from utils.blockchain import sign_and_send, stake_for_agent, get_stake_amount
 
 
 def render_seller_form(owner_address: str, private_key: str) -> None:
     st.markdown("## 📝 Enregistrer un nouvel agent")
+
+    # Afficher le stake actuel
+    current_stake = get_stake_amount(owner_address)
+    if current_stake > 0:
+        st.info(f"💰 Stake actuel : **{current_stake} ETH** déjà déposé")
 
     with st.form("register_form"):
         st.markdown("### Identité")
@@ -46,17 +51,32 @@ def render_seller_form(owner_address: str, private_key: str) -> None:
 
         st.markdown("### Capacités")
         col1, col2, col3 = st.columns(3)
-        llm_model    = col1.selectbox("Modèle LLM", ["llama-3.3-70b", "gpt-4o", "claude-3-5-sonnet"])
+        llm_model    = col1.selectbox(
+            "Modèle LLM",
+            ["llama-3.3-70b", "gpt-4o", "claude-3-5-sonnet"]
+        )
         cpu_limit    = col2.number_input("CPU limit", 1, 8, 1)
         ram_limit_mb = col3.number_input("RAM (MB)", 128, 8192, 512)
         timeout_sec  = st.slider("Timeout (sec)", 10, 600, 120)
 
-        st.markdown("### Pricing")
+        st.markdown("### Pricing & Stake")
         col1, col2, col3 = st.columns(3)
         price_per_task       = col1.number_input("Prix / tâche (USDC)", 0.0, 100.0, 0.10)
         access_duration_days = col2.number_input("Durée accès (jours)", 1, 365, 30)
         max_calls_per_day    = col3.number_input("Appels max / jour", 1, 10000, 100)
-        stake_amount         = st.number_input("Stake (ETH)", 0.0, 100.0, 0.5)
+
+        stake_amount = st.number_input(
+            "Stake (ETH) *",
+            min_value=0.1,
+            max_value=100.0,
+            value=0.5,
+            step=0.1,
+            help="Minimum 0.1 ETH requis pour être provider éligible"
+        )
+        st.caption(
+            f"💡 Ce montant sera verrouillé dans StakingContract. "
+            f"Il peut être slashé si votre agent produit des résultats invalides."
+        )
 
         submitted = st.form_submit_button("🚀 Enregistrer l'agent", type="primary")
 
@@ -66,17 +86,22 @@ def render_seller_form(owner_address: str, private_key: str) -> None:
         if not name:         errors.append("Nom requis")
         if not description:  errors.append("Description requise")
         if not docker_image: errors.append("Image Docker requise")
+        if stake_amount < 0.1:
+            errors.append("Stake minimum 0.1 ETH")
 
         if errors:
             for e in errors:
                 st.error(e)
             return
 
-        env_var_keys = [k.strip() for k in env_var_keys_raw.split(",") if k.strip()]
+        env_var_keys = [
+            k.strip() for k in env_var_keys_raw.split(",") if k.strip()
+        ]
 
         with st.status("Enregistrement en cours...", expanded=True) as status:
             try:
-                st.write("📤 Envoi au backend...")
+                # ── Étape 1 — /register ───────────────────────────────────
+                st.write("📤 Étape 1/4 — Envoi au backend...")
                 reg_data = register_agent({
                     "agent_id":            agent_id,
                     "name":                name,
@@ -99,12 +124,12 @@ def render_seller_form(owner_address: str, private_key: str) -> None:
                     "ram_limit_mb":        int(ram_limit_mb),
                     "timeout_sec":         int(timeout_sec),
                 })
-
                 registration_id = reg_data["registration_id"]
                 agent_uri       = reg_data["agent_uri"]
                 st.write(f"✅ registration_id: `{registration_id[:16]}...`")
 
-                st.write("🔐 Signature de la transaction...")
+                # ── Étape 2 — Signer NFT on-chain ─────────────────────────
+                st.write("🔐 Étape 2/4 — Mint NFT on-chain...")
                 tx_hash, token_id = sign_and_send(
                     private_key=private_key,
                     agent_id=agent_id,
@@ -115,15 +140,30 @@ def render_seller_form(owner_address: str, private_key: str) -> None:
                 st.write(f"✅ tx_hash: `{tx_hash[:20]}...`")
                 st.write(f"✅ tokenId: `{token_id}`")
 
-                st.write("📋 Confirmation on-chain...")
+                # ── Étape 3 — /confirm ────────────────────────────────────
+                st.write("📋 Étape 3/4 — Confirmation backend...")
                 confirmed = confirm_agent(registration_id, tx_hash, token_id)
+                st.write(f"✅ Agent confirmé — endpoint: `{confirmed.get('platform_endpoint', '')[:40]}...`")
 
-                status.update(label="✅ Agent enregistré !", state="complete")
+                # ── Étape 4 — Stake ETH ───────────────────────────────────
+                st.write(f"💰 Étape 4/4 — Staking {stake_amount} ETH...")
+                stake_tx = stake_for_agent(
+                    private_key=private_key,
+                    stake_amount_eth=stake_amount,
+                )
+                st.write(f"✅ Stake tx: `{stake_tx[:20]}...`")
+
+                # ── Résultat final ────────────────────────────────────────
+                status.update(label="✅ Agent enregistré et staké !", state="complete")
                 st.success(f"Agent **{name}** enregistré avec succès !")
 
-                col1, col2 = st.columns(2)
-                col1.metric("Token ID", token_id)
-                col2.metric("Status", confirmed.get("status", "active"))
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Token ID",   token_id)
+                col2.metric("Status",     confirmed.get("status", "active"))
+                col3.metric("Stake",      f"{stake_amount} ETH")
+
+                new_stake = get_stake_amount(owner_address)
+                st.info(f"💰 Stake total dans StakingContract : **{new_stake} ETH**")
                 st.code(confirmed.get("docker_image", ""), language="text")
                 st.info(f"🔗 Endpoint: `{confirmed.get('platform_endpoint', '')}`")
 
