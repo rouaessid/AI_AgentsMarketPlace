@@ -25,7 +25,11 @@ class Settings(BaseSettings):
     identity_registry_address: str = ""
     platform_private_key:      str = ""
     platform_wallet_address:   str = ""
+<<<<<<< HEAD
     staking_contract_address: str = "" 
+=======
+    staking_contract_address: str = ""
+>>>>>>> 0431282fe7c61a1515ebbf60168ac3132b686c0b
 
     sandbox_backend:  str = "docker"
     sandbox_network:  str = "none"
