@@ -4,7 +4,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
+import uuid
 from utils.api import get_agent_readme, run_agent, get_tunnel_info
+from utils.blockchain import deposit_task_payment
 
 
 def render_agent_detail(agent_id: str) -> None:
@@ -97,15 +99,30 @@ print("Manifest:", result["manifest_hash"])
                 params[key] = val
 
         if st.button("▶️ Lancer", key=f"run_{agent_id}", type="primary"):
-            if not prompt:
+            wallet = st.session_state.get("buyer_wallet")
+            if not wallet:
+                st.warning("Connectez d'abord votre wallet !")
+            elif not prompt:
                 st.warning("Entrer un prompt")
             elif len(params) < len(env_keys):
                 missing = [k for k in env_keys if k not in params]
                 st.warning(f"Clés manquantes : {missing}")
             else:
-                with st.spinner("Exécution en cours..."):
+                with st.spinner("Paiement Escrow et Exécution en cours..."):
                     try:
-                        result = run_agent(agent_id, prompt, params)
+                        price = pricing.get("price_per_task", 0)
+                        task_id = str(uuid.uuid4())[:8]
+
+                        if price > 0:
+                            st.info(f"⏳ Dépôt de {price} ETH dans l'Escrow...")
+                            tx_hash = deposit_task_payment(
+                                private_key=wallet["private_key"],
+                                task_id=task_id,
+                                amount_eth=float(price)
+                            )
+                            st.success(f"💸 Paiement déposé ! Tx: {tx_hash}")
+
+                        result = run_agent(agent_id, prompt, params, task_id)
                         st.success(
                             f"✅ Status: {result['status']} ({result['duration_sec']}s)"
                         )

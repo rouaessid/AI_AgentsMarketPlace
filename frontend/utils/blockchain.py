@@ -9,6 +9,7 @@ RPC_URL  = env.get("RPC_URL", "http://127.0.0.1:8545")
 CHAIN_ID = int(env.get("CHAIN_ID", 31337))
 REGISTRY = env.get("IDENTITY_REGISTRY_ADDRESS", "")
 STAKING  = env.get("STAKING_CONTRACT_ADDRESS", "")
+ESCROW   = env.get("ESCROW_MANAGER_ADDRESS", "")
 
 # ABI IdentityRegistry
 REGISTRY_ABI = [
@@ -67,6 +68,17 @@ STAKING_ABI = [
         "name": "isEligibleProvider",
         "outputs": [{"name": "", "type": "bool"}],
         "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+# ABI EscrowManager — minimal
+ESCROW_ABI = [
+    {
+        "inputs": [{"name": "taskId_", "type": "string"}],
+        "name": "depositPayment",
+        "outputs": [],
+        "stateMutability": "payable",
         "type": "function",
     },
 ]

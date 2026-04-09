@@ -305,6 +305,13 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         return _agents[agentId_];
     }
 
+    function getAgentType(string calldata agentId_)
+        external view agentExists(agentId_)
+        returns (uint8)  // 0 = PROVIDER, 1 = JUDGE
+    {
+        return uint8(_agents[agentId_].agentType);
+    }
+
     function getVersion(uint256 tokenId)
         external view returns (AgentVersion memory)
     {

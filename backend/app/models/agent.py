@@ -187,6 +187,7 @@ class AgentRecord(BaseModel):
 
 
 class RunRequest(BaseModel):
+    task_id: str | None = None
     prompt: str = Field(..., description="La tache a executer")
     params: dict[str, Any] = Field(
         default_factory=dict,

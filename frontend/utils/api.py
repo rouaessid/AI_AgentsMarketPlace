@@ -69,14 +69,19 @@ def confirm_agent(registration_id: str, tx_hash: str, token_id: int) -> dict:
     return resp.json()
 
 
-def run_agent(agent_id: str, prompt: str, params: dict) -> dict:
+def run_agent(agent_id: str, prompt: str, params: dict, task_id: str | None = None) -> dict:
     tunnel = get_tunnel_info()
     endpoint = tunnel.get("endpoints", {}).get(agent_id)
     if not endpoint:
         endpoint = f"{BACKEND_URL}/api/v1/agents/{agent_id}/run"
+    
+    payload = {"prompt": prompt, "params": params}
+    if task_id:
+        payload["task_id"] = task_id
+
     resp = requests.post(
         endpoint,
-        json={"prompt": prompt, "params": params},
+        json=payload,
         timeout=120,
     )
     resp.raise_for_status()
