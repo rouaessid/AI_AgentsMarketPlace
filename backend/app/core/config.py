@@ -27,7 +27,26 @@ class Settings(BaseSettings):
     platform_wallet_address:   str = ""
     staking_contract_address:   str = ""
     validation_registry_address: str = ""
-    escrow_manager_address:     str = ""
+    escrow_manager_address:      str = ""
+    reputation_registry_address: str = ""
+
+    # Judge keys — dict wallet_address → private_key (source primaire)
+    # Ex: JUDGE_WALLET_KEYS={"0x90F79...":"0x7c852...","0xAutre...":"0xClé..."}
+    judge_wallet_keys: dict[str, str] = {}
+
+    # Backwards-compat — dérivés automatiquement si judge_wallet_keys est vide
+    judge_1_private_key: str = ""
+    judge_2_private_key: str = ""
+    judge_3_private_key: str = ""
+    judge_1_id: str = "judge-alpha"
+    judge_2_id: str = "judge-beta"
+    judge_3_id: str = "judge-gamma"
+
+    # Judge LLM API keys (separate to avoid quota collisions)
+    judge_alpha_groq_key:   str = ""
+    judge_alpha_tavily_key: str = ""
+    judge_beta_groq_key:    str = ""
+    judge_gamma_groq_key:   str = ""
 
     sandbox_backend:  str = "docker"
     sandbox_network:  str = "none"
@@ -43,7 +62,7 @@ class Settings(BaseSettings):
 
     backend_port:     int = 8000
 
-    allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+    allowed_origins: list[str] = ["*"]
 
 
 @lru_cache

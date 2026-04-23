@@ -1,0 +1,49 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "agent_id": "judge-alpha",
+  "name": "Judge Alpha",
+  "description": "Independent AI judge. Evaluates agent execution traces using Groq (Llama-3.3-70b) with optional Tavily fact-checking. Returns a structured verdict (score 0-100, VALID/INVALID) based on task completion quality.",
+  "version": "1.0.0",
+  "agent_type": "judge",
+  "docker_image": "agentmarket/judge-alpha:v1",
+  "image_url": null,
+  "llm_model": "llama-3.3-70b-versatile",
+  "framework": "groq_raw",
+  "language": "python",
+  "services": [
+    {
+      "name": "run",
+      "endpoint": "/api/v1/agents/judge-alpha/run",
+      "version": "1.0.0",
+      "skills": ["evaluation", "fact-checking", "structured-scoring"]
+    }
+  ],
+  "supported_tasks": [
+    "validate",
+    "score",
+    "evaluate"
+  ],
+  "special_caps": [
+    "trace-evaluation",
+    "fact-checking",
+    "commit-reveal-voting",
+    "structured-verdict"
+  ],
+  "env_var_keys": [
+    "GROQ_API_KEY",
+    "TAVILY_API_KEY"
+  ],
+  "pricing": {
+    "price_per_task": 0.0,
+    "currency": "ETH",
+    "note": "Judge agents earn validation fees from the protocol, not from buyers"
+  },
+  "stake_amount": 0.1,
+  "cpu_limit": 1,
+  "ram_limit_mb": 512,
+  "timeout_sec": 60,
+  "readme": "# Judge Alpha — Independent AI Execution Evaluator\n\n## Overview\nJudge Alpha is a validation agent that evaluates AI agent execution traces. It is NOT listed on the marketplace — it operates in the background as part of the protocol's quality assurance layer.\n\n## How It Works\n1. **Input** — The platform passes the agent execution trace as JSON in the `prompt` field of the standard `/run` endpoint\n2. **Fact-checking** — Optionally re-runs search queries from the trace via Tavily for independent verification\n3. **Scoring** — Groq (Llama-3.3-70b) evaluates correctness, completeness, and accuracy\n4. **Output** — Returns a structured verdict with score (0-100) and VALID/INVALID\n\n## Input Format (prompt field, JSON-serialized)\n```json\n{\n  \"task_prompt\": \"What are AI trends in 2025?\",\n  \"agent_output\": \"{...}\",\n  \"trajectory\": [...],\n  \"tools_used\": 5,\n  \"llm_calls\": 3,\n  \"search_calls\": 2,\n  \"errors_count\": 0,\n  \"duration_sec\": 12.5,\n  \"total_tokens\": 3200\n}\n```\n\n## Output Format\n```json\n{\n  \"judge_id\": \"judge-alpha\",\n  \"score\": 85,\n  \"verdict\": \"VALID\",\n  \"justification\": \"The agent correctly answered the research question...\"\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n- `TAVILY_API_KEY` — Optional, enables fact-checking via re-search\n",
+  "badges": ["Judge", "Verified"],
+  "categories": ["validation", "quality-assurance"],
+  "active": true
+}

@@ -2,10 +2,11 @@
 backend/app/services/sandbox_service.py  — Phase 2
 """
 from __future__ import annotations
-import asyncio, base64, concurrent.futures, hashlib, json, logging, subprocess, uuid
+import asyncio, base64, concurrent.futures, hashlib, json, logging, subprocess, uuid, socket, time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+import httpx
 from app.core.config import get_settings
 
 logger   = logging.getLogger(__name__)
@@ -40,18 +41,38 @@ class ExecutionManifest:
             "duration_sec":self.duration_sec,"status":self.status,"error":self.error,
             "platform_endpoint":self.platform_endpoint,
             "logs_preview":(self.logs or "")[:2000],
+            "output": self.output, # Transmit full output to frontend
             "output_preview":str(self.output or "")[:500],
             "proxy_hash":self.proxy_hash,"proxy_cid":self.proxy_cid,
             "proxy_metrics":self.proxy_metrics,
         }
 
 
-def _validate_output(raw, schema="default_v1"):
-    if schema == "text_plain": return raw.strip()
-    try: parsed = json.loads(raw)
-    except json.JSONDecodeError as e: raise ValueError(f"JSON attendu: {e}")
+def _validate_output(raw: str, schema: str = "default_v1"):
+    if not raw or not raw.strip():
+        return None
+    if schema == "text_plain":
+        return raw.strip()
+    
+    # Try to find a JSON block in case of logs pollution
+    clean_raw = raw.strip()
+    if not (clean_raw.startswith("{") or clean_raw.startswith("[")):
+        # Attempt to find the first { and last }
+        start = clean_raw.find("{")
+        end = clean_raw.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            clean_raw = clean_raw[start:end+1]
+
+    try:
+        parsed = json.loads(clean_raw)
+    except json.JSONDecodeError:
+        # If JSON fails, fallback to raw text instead of failing the whole run
+        logger.warning("Failed to parse agent output as JSON, falling back to raw text")
+        return raw.strip()
+
     if schema == "default_v1" and not isinstance(parsed, dict):
-        raise ValueError("objet JSON attendu")
+        # Even if it's not a dict, we return it as is rather than crashing
+        return parsed
     return parsed
 
 
@@ -134,6 +155,14 @@ def _docker_run_sync(cmd, timeout):
         return 0, json.dumps({"status":"success","output":"[mock]","logs":[],"metrics":{}}), ""
 
 
+def _get_free_port():
+    s = socket.socket()
+    s.bind(('', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
 def _get_docker_host_ip():
     try:
         r = subprocess.run(
@@ -160,7 +189,7 @@ class SandboxService:
             logger.warning("Digest non résolu pour '%s'", image)
         return result
 
-    async def run_agent(self, record, sandbox_input, env_vars=None):
+    async def run_agent(self, record, sandbox_input, env_vars=None, use_proxy=True):
         from app.services.ngrok_service import get_agent_endpoint
         from app.services.proxy_service import ProxyService
 
@@ -177,10 +206,14 @@ class SandboxService:
         run_id     = str(uuid.uuid4())
         started_at = datetime.now(timezone.utc)
 
-        # ── 1. Démarrer proxy ──────────────────────────────────────────────
+        # ── 1. Démarrer proxy (seulement pour les providers, pas les judges) ─
         proxy = ProxyService(run_id, record.agent_id, settings.storage_path)
-        proxy_port, ca_cert_path = proxy.start()
-        logger.info("Proxy port=%d", proxy_port)
+        if use_proxy:
+            proxy_port, ca_cert_path = proxy.start()
+            logger.info("Proxy port=%d", proxy_port)
+        else:
+            proxy_port, ca_cert_path = 0, None
+            logger.info("Proxy skipped for judge container")
 
         # ── 2. TASK_INPUT base64 ───────────────────────────────────────────
         task_input_b64 = base64.b64encode(json.dumps({
@@ -201,6 +234,7 @@ class SandboxService:
         cmd = [
             "docker", "run", "--rm",
             "--network",      settings.sandbox_network,
+            "--add-host",     "host.docker.internal:host-gateway",
             "--cpus",         str(cpu),
             "--memory",       f"{ram}m",
             "--memory-swap",  f"{ram}m",
@@ -208,12 +242,18 @@ class SandboxService:
             "--tmpfs",        "/tmp:size=64m,noexec,nosuid",
             "--security-opt", "no-new-privileges",
             "--user",         "65534:65534",
-            # Proxy injecté
-            "-e", f"HTTP_PROXY={proxy_url}",
-            "-e", f"HTTPS_PROXY={proxy_url}",
-            "-e", f"http_proxy={proxy_url}",
-            "-e", f"https_proxy={proxy_url}",
         ]
+        
+        # ── Proxy injecté (si démarré) ──────────────────────────────────────
+        if proxy_port > 0:
+            cmd += [
+                "-e", f"HTTP_PROXY={proxy_url}",
+                "-e", f"HTTPS_PROXY={proxy_url}",
+                "-e", f"http_proxy={proxy_url}",
+                "-e", f"https_proxy={proxy_url}",
+            ]
+        else:
+            logger.warning("Skipping proxy injection because ProxyService failed to start.")
 
         # CA cert dynamique — toujours monté
         if ca_cert_path:
@@ -228,15 +268,27 @@ class SandboxService:
 
         # TASK_INPUT + clés buyer
         cmd += ["-e", f"TASK_INPUT={task_input_b64}"]
+        cmd += ["-e", "PYTHONHTTPSVERIFY=0"] # Désactiver SSL pour le proxy sur Windows
         for k, v in (env_vars or {}).items():
             cmd += ["-e", f"{k}={v}"]
 
         cmd.append(docker_image)
-
         logger.info("Sandbox: %s agent=%s proxy=%s", docker_image, record.agent_id, proxy_url)
 
-        # ── 5. Exécuter container ──────────────────────────────────────────
-        exit_code, stdout, stderr = await self._run_docker(cmd, timeout)
+        # Détection du mode : Script (Task) ou Serveur (Service)
+        rf = record.registration_file
+        services = rf.services if (rf and rf.services) else []
+        is_service = len(services) > 0
+        
+        if is_service:
+            # Mode SERVICE : On lance en arrière-plan et on envoie une requête HTTP
+            stdout, stderr, exit_code, response_json = await self._run_service_agent(
+                cmd, record.agent_id, services, sandbox_input, timeout
+            )
+        else:
+            # Mode SCRIPT : docker run standard (bloquant)
+            exit_code, stdout, stderr = await self._run_docker(cmd, timeout)
+            response_json = None
 
         # ── 6. Arrêter proxy → ProxyTrace ──────────────────────────────────
         proxy_trace = proxy.stop()
@@ -249,11 +301,16 @@ class SandboxService:
         status = "success"; output = None; error = None
         if exit_code == -1:
             status = "timeout"; error = f"Timeout after {timeout}s"
-        elif exit_code != 0:
-            status = "failure"; error = f"Exit code {exit_code} — {stderr[:300]}"
+        elif exit_code != 0 and not is_service: 
+            status = "failed"; error = f"Exit code {exit_code} — {stderr[:300]}"
+        elif is_service and not response_json:
+            status = "failed"; error = f"Service failed to respond — check container logs"
         else:
             try:
-                output = _validate_output(stdout, schema)
+                if is_service and response_json:
+                    output = response_json.get("output", response_json)
+                else:
+                    output = _validate_output(stdout, schema)
             except ValueError as e:
                 status = "failure"; error = str(e)
 
@@ -274,7 +331,12 @@ class SandboxService:
         platform_sig = _sign(manifest_hash)
 
         # ── 9. Upload proxy trace IPFS ─────────────────────────────────────
-        proxy_cid = await self._upload_proxy_trace(proxy_trace)
+        # Inject prompt and output in the trace for judges
+        proxy_cid = await self._upload_proxy_trace(
+            proxy_trace, 
+            task_prompt=sandbox_input.task_prompt,
+            agent_output=output
+        )
 
         proxy_metrics = {
             "total_tokens":     proxy_trace.total_tokens,
@@ -306,21 +368,143 @@ class SandboxService:
             proxy_metrics=proxy_metrics,
         )
 
-    async def _upload_proxy_trace(self, proxy_trace):
+    async def _upload_proxy_trace(self, proxy_trace, task_prompt: str, agent_output: Any) -> str:
+        """Upload proxy trace to IPFS. Always returns a non-null CID (local fallback)."""
+        data = proxy_trace.to_dict()
+        
+        # Merge task info into the trace bundle for judges
+        data["task_prompt"] = task_prompt
+        data["agent_output"] = agent_output if isinstance(agent_output, str) else json.dumps(agent_output)
+        
+        content = json.dumps(data, indent=2, ensure_ascii=False)
         try:
             from app.services.ipfs_service import IPFSService
             ipfs = IPFSService()
             cid, _, _ = await ipfs.upload(
-                json.dumps(proxy_trace.to_dict(), indent=2, ensure_ascii=False),
+                content,
                 name=f"proxy-trace-{proxy_trace.run_id[:8]}"
             )
             logger.info("ProxyTrace IPFS: %s", cid)
             return cid
         except Exception as e:
-            logger.warning("IPFS proxy trace: %s", e)
-            return None
+            logger.warning("IPFS proxy trace upload failed (%s) — using local fallback", e)
+            # Fallback: save locally and return a deterministic local CID
+            import hashlib
+            from pathlib import Path
+            h   = hashlib.sha256(content.encode()).hexdigest()[:40]
+            cid = f"QmLOCAL{h}"
+            base = Path(settings.storage_path) / "ipfs_local"
+            base.mkdir(parents=True, exist_ok=True)
+            (base / f"{cid}.json").write_text(content, encoding="utf-8")
+            logger.info("ProxyTrace saved locally: %s", cid)
+            return cid
 
     async def _run_docker(self, cmd, timeout):
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
             return await loop.run_in_executor(pool, _docker_run_sync, cmd, timeout)
+
+    async def _run_service_agent(self, base_cmd, agent_id, services, sandbox_input, timeout):
+        """
+        Démarre un agent serveur, attend qu'il soit prêt, et envoie la requête.
+        """
+        port = _get_free_port()
+        container_name = f"sandbox-{uuid.uuid4().hex[:8]}"
+        
+        # Modifier commande : détaché + mapping port + nom
+        cmd = ["docker", "run", "-d", "--name", container_name]
+        
+        # En mode SERVICE (serveur), on retire --user et --security-opt pour éviter 
+        # les erreurs de permissions avec uvicorn et les accès fichiers.
+        filtered_options = []
+        # Remove security restrictions and --network none for service containers:
+        # they need outbound HTTP (Groq/Tavily) and port-mapping to work.
+        skip_list = [
+            "--user", "--security-opt", "--tmpfs",
+            "65534:65534", "no-new-privileges", "/tmp:size=64m,noexec,nosuid",
+            "--network", "none",
+        ]
+        image = base_cmd[-1]
+        i = 0
+        while i < len(base_cmd):
+            opt = base_cmd[i]
+            if opt in skip_list:
+                if opt in ["--user", "--security-opt", "--tmpfs", "--network"]:
+                    i += 1  # skip the argument that follows too
+                i += 1
+                continue
+            if i >= 2 and i < len(base_cmd)-1:
+                filtered_options.append(opt)
+            i += 1
+
+        # Service containers use bridge so port-mapping and outbound HTTP work.
+        cmd += ["--network", "bridge"] + filtered_options + ["-p", f"{port}:8000", image]
+        
+        logger.info("[service] Starting container %s on port %d. Cmd: %s", container_name, port, " ".join(cmd))
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if r.returncode != 0:
+            logger.error("[service] Docker run failed (code %d): %s", r.returncode, r.stderr)
+            return "", r.stderr, r.returncode, None
+
+        stdout = ""; stderr = ""; exit_code = 0; response_json = None
+        
+        try:
+            # 1. Attendre que le serveur soit prêt (polling /health)
+            url_root = f"http://localhost:{port}"
+            async with httpx.AsyncClient(timeout=10) as client:
+                agent_ready = False
+                for i in range(30): # 30s max startup, 1s between retries
+                    try:
+                        resp = await client.get(f"{url_root}/health")
+                        if resp.status_code == 200:
+                            logger.info("[service] Agent ready at %s after %ds", url_root, i + 1)
+                            agent_ready = True
+                            break
+                    except:
+                        pass
+                    await asyncio.sleep(1)  # wait 1s between each retry
+
+                if not agent_ready:
+                    r_logs = subprocess.run(["docker", "logs", "--tail", "30", container_name], capture_output=True, text=True)
+                    logger.error("[service] Healthcheck timeout after 30s. Last logs:\n%s", r_logs.stdout + r_logs.stderr)
+                
+                # 2. Envoyer la tâche
+                # On utilise l'endpoint défini dans les services
+                run_endpoint = "/run"
+                for s in services:
+                    if s.name == "run":
+                        run_endpoint = s.endpoint
+                        break
+                
+                logger.info("[service] Posting task to %s", run_endpoint)
+                payload = {
+                    "task_id": sandbox_input.task_id,
+                    "prompt": sandbox_input.task_prompt,
+                    "params": sandbox_input.task_params
+                }
+                
+                resp = await client.post(f"{url_root}{run_endpoint}", json=payload, timeout=timeout)
+                if resp.status_code == 200:
+                    response_json = resp.json()
+                    stdout = json.dumps(response_json)
+                    logger.info("[service] Task completed successfully")
+                else:
+                    stderr = f"Service returned error {resp.status_code}: {resp.text}"
+                    exit_code = 1
+                    logger.warning("[service] Task failed: %s", stderr)
+
+        except Exception as e:
+            logger.exception("[service] Error during service execution")
+            stderr = str(e)
+            exit_code = 1
+        finally:
+            # Cleanup
+            logger.info("[service] Stopping container %s", container_name)
+            subprocess.run(["docker", "stop", container_name], capture_output=True)
+            # Capturer les logs avant de supprimer
+            r = subprocess.run(["docker", "logs", container_name], capture_output=True, text=True)
+            stderr += "\n[CONTAINER LOGS]\n" + r.stdout + r.stderr
+            subprocess.run(["docker", "rm", container_name], capture_output=True)
+            
+        return stdout, stderr, exit_code, response_json

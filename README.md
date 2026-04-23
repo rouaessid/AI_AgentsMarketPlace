@@ -112,21 +112,3 @@ Le projet prépare le terrain pour une orchestration totalement autonome :
 
 ---
 
-## 🎨 Spécifications pour le Design Frontend (React Premium)
-
-Le frontend doit refléter la dualité entre **Hautement Technologique (IA)** et **Solidité Institutionnelle (Blockchain)**.
-
-### Points Clés du Design :
-- **Aesthétique Cyber-Minimaliste** : Mode sombre profond (Deep Black) avec des dégradés de bleu néon et de violet électrique.
-- **Dashboard Marketplace** : Grille de cartes "Premium" avec badge de réputation, score de fiabilité, et boutons d'action glassmorphismes.
-- **Timeline de Tâche Interactive** : Vue en temps réel montrant le flux : `Dépôt Escrow` -> `Exécution Sandbox` -> `Vote des Juges` -> `Versement des Fonds`.
-- **Wallet Integration** : Interface minimaliste pour changer de rôle (Seller / Buyer / Judge) et voir ses balances de Staking et Réputation.
-- **Animations Micro-interactions** : Transitions fluides lors de la validation des votes et effets de "glow" sur les agents avec une réputation élevée.
-
----
-
-## 🛠️ Stack Technique
-- **Smart Contracts** : Solidity, OpenZeppelin, Hardhat.
-- **Backend** : FastAPI, Python, Docker (Sandboxing), Web3.py.
-- **Frontend** : Streamlit (Phase 1) / Next.js & Tailwind (Phase 2).
-- **Standard** : ERC-8004.

@@ -30,6 +30,7 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         uint256     createdAt;
         uint256     currentTokenId;
         uint256[]   tokenHistory;
+        uint256     pricePerTask;   // in wei — set at registration, verified by EscrowManager
     }
 
     bytes32 private constant _SET_WALLET_TYPEHASH = keccak256(
@@ -47,7 +48,7 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
     string public agentRegistry;
 
     event AgentCreated(
-        string  indexed agentId,
+        string  agentId,
         uint256 indexed tokenId,
         address indexed owner,
         AgentType agentType,
@@ -56,7 +57,7 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
     );
 
     event AgentVersionMinted(
-        string  indexed agentId,
+        string  agentId,
         uint256 indexed newTokenId,
         uint256 indexed previousTokenId,
         string  agentURI,
@@ -136,7 +137,8 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         string    calldata agentId_,
         AgentType agentType_,
         string    calldata agentURI_,
-        string    calldata version_
+        string    calldata version_,
+        uint256   pricePerTask_       // in wei, e.g. 0.05 ETH = 50000000000000000
     )
         external
         validAgentId(agentId_)
@@ -167,7 +169,8 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
             agentWallet:    msg.sender,
             createdAt:      block.timestamp,
             currentTokenId: tokenId,
-            tokenHistory:   history
+            tokenHistory:   history,
+            pricePerTask:   pricePerTask_
         });
 
         _agentIdExists[agentId_] = true;
@@ -345,6 +348,23 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         returns (address)
     {
         return _agents[agentId_].agentWallet;
+    }
+
+    // ─── Price ───────────────────────────────────────────────────────────────
+
+    /// @notice Returns the price per task in wei for a given agent.
+    function getPricePerTask(string calldata agentId_)
+        external view agentExists(agentId_)
+        returns (uint256)
+    {
+        return _agents[agentId_].pricePerTask;
+    }
+
+    /// @notice Agent owner can update their price.
+    function setPricePerTask(string calldata agentId_, uint256 newPrice_)
+        external agentExists(agentId_) onlyAgentOwner(agentId_)
+    {
+        _agents[agentId_].pricePerTask = newPrice_;
     }
 
     function isActive(string calldata agentId_) external view returns (bool) {

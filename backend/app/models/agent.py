@@ -4,6 +4,8 @@ from enum import Enum
 from typing import Any
 from pydantic import BaseModel, Field
 
+_VERSION_RE = r"^\d+\.\d+\.\d+$"
+
 
 class AgentType(str, Enum):
     PROVIDER = "provider"
@@ -13,9 +15,10 @@ class AgentType(str, Enum):
 
 
 class AgentStatus(str, Enum):
-    ACTIVE    = "active"
-    SUSPENDED = "suspended"
-    REVOKED   = "revoked"
+    ACTIVE            = "active"
+    SUSPENDED         = "suspended"
+    REVOKED           = "revoked"
+    PENDING_SIGNATURE = "pending_signature"
 
 
 class ServiceEndpoint(BaseModel):
@@ -37,7 +40,7 @@ class AgentRegistrationFile(BaseModel):
     name:           str
     description:    str
     image:          str | None = None
-    version:        str = Field("1.0.0", pattern=r"^\d+\.\d+\.\d+$")
+    version:        str = Field("1.0.0", pattern=_VERSION_RE)
     readme:         str | None = None
     services:       list[ServiceEndpoint]        = Field(default_factory=list)
     x402Support:    bool                         = False
@@ -61,7 +64,7 @@ class AgentSubmitRequest(BaseModel):
     )
     name:            str = Field(..., min_length=3, max_length=128)
     description:     str = Field(..., min_length=10, max_length=2048)
-    version:         str = Field("1.0.0", pattern=r"^\d+\.\d+\.\d+$")
+    version:         str = Field("1.0.0", pattern=_VERSION_RE)
     agent_type:      AgentType = AgentType.PROVIDER
     image_url:       str | None = None
     readme:          str | None = Field(
@@ -104,15 +107,25 @@ class AgentSubmitRequest(BaseModel):
 
 
 class AgentNewVersionRequest(BaseModel):
-    agent_id:      str
-    owner_address: str = Field(..., pattern=r"^0x[a-fA-F0-9]{40}$")
-    new_version:   str = Field(..., pattern=r"^\d+\.\d+\.\d+$")
-    docker_image:  str = Field(..., description="Nouvelle image ex: username/agent:v2")
-    readme:        str | None = None
-    description:   str | None = None
-    services:      list[ServiceEndpoint] | None = None
-    capabilities:  dict[str, Any] | None = None
-    active:        bool = True
+    """
+    New version = new code only.
+    Triggers mintNewVersion() on-chain → new NFT token_id.
+    Editorial changes (description, readme, price) go to AgentEditRequest.
+    """
+    agent_id:     str
+    new_version:  str = Field(..., pattern=_VERSION_RE)
+    docker_image: str = Field(..., description="Nouvelle image Docker ex: myagent:v2")
+
+
+class AgentEditRequest(BaseModel):
+    """
+    Editorial/business changes — no blockchain tx, no new token.
+    Updates DB + re-uploads IPFS manifest with new metadata.
+    """
+    description:    str | None = None
+    readme:         str | None = None
+    price_per_task: float | None = Field(None, ge=0.0)
+    name:           str | None = None
 
 
 class AgentOnChainConfirm(BaseModel):
@@ -125,19 +138,27 @@ class UnsignedTx(BaseModel):
     contract_address: str
     function_name:    str
     abi_encoded_args: dict[str, Any]
+    data:             str | None = None  # hex calldata for MetaMask eth_sendTransaction
     estimated_gas:    int = 300_000
     chain_id:         int
 
 
 class AgentSubmitResponse(BaseModel):
-    registration_id: str
-    agent_id:        str
-    status:          str = "pending_signature"
-    ipfs_cid:        str
-    agent_uri:       str
-    metadata_hash:   str
-    unsigned_tx:     UnsignedTx
-    message:         str = "Signez registerAgent() avec votre wallet"
+    registration_id:   str
+    agent_id:          str
+    status:            str = "active"
+    ipfs_cid:          str
+    agent_uri:         str
+    metadata_hash:     str
+    token_id:          int | None        = None
+    tx_hash:           str | None        = None   # IdentityRegistry tx (platform-signed)
+    stake_tx_hash:     str | None        = None   # StakingContract tx (seller-signed via MetaMask)
+    platform_endpoint: str | None        = None
+    unsigned_tx:       UnsignedTx | None = None   # fallback when platform cannot sign
+    # Seller must call StakingContract.stake() via MetaMask with this info
+    stake_contract:    str | None        = None   # StakingContract address
+    stake_amount_eth:  float             = 0.0    # amount seller must stake (ETH)
+    message:           str               = "Agent enregistré et actif"
 
 
 class AgentNewVersionResponse(BaseModel):
@@ -146,8 +167,10 @@ class AgentNewVersionResponse(BaseModel):
     new_version:     str
     new_ipfs_cid:    str
     new_agent_uri:   str
-    unsigned_tx:     UnsignedTx
-    message:         str = "Signez mintNewVersion() avec votre wallet"
+    status:          str         = "pending_version"
+    tx_hash:         str | None  = None          # platform-signed tx (blockchain available)
+    unsigned_tx:     UnsignedTx | None = None    # fallback when blockchain unavailable
+    message:         str = "Version soumise — en attente de confirmation blockchain"
 
 
 class AgentVersionInfo(BaseModel):
@@ -187,9 +210,13 @@ class AgentRecord(BaseModel):
 
 
 class RunRequest(BaseModel):
-    task_id: str | None = None
-    prompt: str = Field(..., description="La tache a executer")
-    params: dict[str, Any] = Field(
+    task_id:      str | None = None
+    prompt:       str = Field(..., description="La tache a executer")
+    params:       dict[str, Any] = Field(
         default_factory=dict,
         description="Cles API requises ex: {'GROQ_API_KEY': '...', 'TAVILY_API_KEY': '...'}"
+    )
+    buyer_wallet: str | None = Field(
+        None,
+        description="Wallet du buyer — si present et access verifie, declenche la validation"
     )

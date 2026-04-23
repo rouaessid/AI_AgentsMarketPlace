@@ -1,34 +1,64 @@
 from __future__ import annotations
-import json
 import logging
 import uuid
-from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import JSONResponse
+from web3 import Web3
 
+from app.core.config import get_settings
 from app.models.agent import (
-    AgentNewVersionRequest, AgentNewVersionResponse,
+    AgentEditRequest, AgentNewVersionRequest, AgentNewVersionResponse,
     AgentOnChainConfirm, AgentRecord,
     AgentSubmitRequest, AgentSubmitResponse,
     RunRequest,
 )
+from app.models.purchase import (
+    PurchaseInfoResponse, PurchaseRequest, PurchaseResponse,
+    AccessStatus, ValidationStatusResponse, JudgeVerdictOut,
+)
 from app.services.agent_service   import AgentService
 from app.services.sandbox_service import SandboxInput, SandboxService
 from app.services.ngrok_service   import get_agent_endpoint, get_ngrok_url
+from app.db import access_repo
 
 logger      = logging.getLogger(__name__)
 router      = APIRouter(prefix="/agents", tags=["agents"])
 agent_svc   = AgentService()
 sandbox_svc = SandboxService()
 _manifests: dict[str, dict] = {}
+_settings   = get_settings()
 
+# ── Minimal EscrowManager ABI for depositPayment ─────────────────────────────
+_ESCROW_DEPOSIT_ABI = [{
+    "inputs": [
+        {"internalType": "string", "name": "taskId_",  "type": "string"},
+        {"internalType": "string", "name": "agentId_", "type": "string"},
+    ],
+    "name": "depositPayment",
+    "outputs": [],
+    "stateMutability": "payable",
+    "type": "function",
+}]
 
-def _parse(data: str) -> dict:
-    try:
-        return json.loads(data)
-    except Exception as e:
-        raise HTTPException(422, detail=f"JSON invalide: {e}")
+# ── Minimal ReputationRegistry ABI for giveFeedback ──────────────────────────
+_REPUTATION_GIVE_FEEDBACK_ABI = [{
+    "inputs": [
+        {"internalType": "uint256", "name": "agentId",       "type": "uint256"},
+        {"internalType": "int128",  "name": "value",         "type": "int128"},
+        {"internalType": "uint8",   "name": "valueDecimals", "type": "uint8"},
+        {"internalType": "string",  "name": "tag1",          "type": "string"},
+        {"internalType": "string",  "name": "tag2",          "type": "string"},
+        {"internalType": "string",  "name": "endpoint",      "type": "string"},
+        {"internalType": "string",  "name": "feedbackURI",   "type": "string"},
+        {"internalType": "bytes32", "name": "feedbackHash",  "type": "bytes32"},
+    ],
+    "name": "giveFeedback",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function",
+}]
+
 
 
 def _http(exc: Exception) -> HTTPException:
@@ -41,17 +71,44 @@ def _http(exc: Exception) -> HTTPException:
 
 
 @router.post("/register", response_model=AgentSubmitResponse, status_code=201)
-async def register_agent(
-    data: Annotated[str, Form(description="AgentSubmitRequest JSON")],
-) -> AgentSubmitResponse:
-    try:
-        req = AgentSubmitRequest.model_validate(_parse(data))
-    except Exception as e:
-        raise HTTPException(422, detail=str(e))
+async def register_agent(req: AgentSubmitRequest) -> AgentSubmitResponse:
+    """Accept JSON body (AgentSubmitRequest) — sent by the React frontend."""
     try:
         return await agent_svc.submit(req)
     except Exception as e:
         raise _http(e)
+
+
+@router.post("/{agent_id}/retry-register")
+async def retry_register(agent_id: str) -> JSONResponse:
+    """
+    Re-génère unsigned_tx pour un agent bloqué en pending_signature.
+    Utile quand le MetaMask tx a revert (ex: out of gas) sans avoir à re-remplir le formulaire.
+    """
+    from app.services.agent_service import _records, _agent_index, _build_register_tx
+    rid = _agent_index.get(agent_id)
+    if not rid or rid not in _records:
+        raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
+    record = _records[rid]
+    if record.status.value not in ("pending_signature", "active"):
+        raise HTTPException(400, detail=f"Agent '{agent_id}' n'est pas en pending_signature (status={record.status.value})")
+
+    # Re-build unsigned_tx with fresh gas estimate — IPFS already uploaded
+    class _FakeReq:
+        def __init__(self, r):
+            self.agent_id    = r.agent_id
+            self.agent_type  = r.agent_type
+            self.version     = r.version
+            self.price_per_task = r.price_per_task or 0.0
+    unsigned_tx = _build_register_tx(_FakeReq(record), record.agent_uri or "")
+    return JSONResponse({
+        "agent_id":        agent_id,
+        "registration_id": rid,
+        "agent_uri":       record.agent_uri,
+        "ipfs_cid":        record.ipfs_cid,
+        "unsigned_tx":     unsigned_tx.model_dump(),
+        "status":          record.status.value,
+    })
 
 
 @router.post("/confirm", response_model=AgentRecord)
@@ -68,6 +125,32 @@ async def reset_store() -> JSONResponse:
     _records.clear()
     _agent_index.clear()
     return JSONResponse({"message": "Store reset OK"})
+
+
+@router.get("/{agent_id}/status")
+async def registration_status(agent_id: str) -> JSONResponse:
+    """
+    Polling endpoint for the pure blockchain-first registration flow.
+
+    Frontend calls this every 2 s after submit() returns tx_hash.
+    Returns the current DB status:
+      - "pending_index"    : tx sent, indexer hasn't seen AgentCreated yet
+      - "pending_signature": blockchain unavailable, MetaMask signature needed
+      - "active"           : indexer confirmed AgentCreated — agent is live
+      - "suspended" / "revoked" : changed by governance
+    """
+    from app.db.identity_repo import get_agent_identity
+    row = get_agent_identity(agent_id)
+    if not row:
+        raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
+    return JSONResponse({
+        "agent_id":   agent_id,
+        "status":     row["status"],
+        "token_id":   row["current_token_id"],
+        "tx_hash":    row["tx_hash"],
+        "block_number": row["block_number"],
+        "confirmed":  row["status"] == "active",
+    })
 
 
 @router.post("/{agent_id}/version", response_model=AgentNewVersionResponse)
@@ -120,6 +203,20 @@ async def get_endpoint(agent_id: str) -> JSONResponse:
                          "available": endpoint is not None})
 
 
+@router.patch("/{agent_id}")
+async def edit_agent(agent_id: str, body: AgentEditRequest) -> JSONResponse:
+    """
+    Editorial changes — no blockchain tx, no new token.
+    Accepts: description, readme, price_per_task, name.
+    Updates DB + re-uploads IPFS manifest.
+    """
+    try:
+        result = await agent_svc.edit_agent(agent_id, body)
+        return JSONResponse(result)
+    except Exception as e:
+        raise _http(e)
+
+
 @router.get("/{agent_id}/readme")
 async def get_readme(agent_id: str) -> JSONResponse:
     try:
@@ -159,6 +256,7 @@ async def run_sandbox(agent_id: str, task_prompt: str = Query("Test sandbox")) -
                          agent_id=agent_id, task_prompt=task_prompt),
         )
     except Exception as e:
+        logger.exception("Erreur Sandbox: %s", e)
         raise HTTPException(500, detail=str(e))
     _manifests[manifest.run_id] = manifest.to_dict()
     return JSONResponse(manifest.to_dict())
@@ -174,7 +272,14 @@ async def get_manifest(agent_id: str, run_id: str) -> JSONResponse:
 # ─── Run public — buyer ───────────────────────────────────────────────────────
 
 @router.post("/{agent_id}/run")
-async def run_agent_public(agent_id: str, body: RunRequest) -> JSONResponse:
+async def run_agent_public(
+    agent_id: str,
+    body: RunRequest,
+    bg: BackgroundTasks,
+) -> JSONResponse:
+    print(f"\n🚀 [DEBUG] REQUETE RECUE POUR L'AGENT: {agent_id}")
+    print(f"📝 Prompt: {body.prompt[:50]}...")
+    logger.info("Incoming run request for agent=%s", agent_id)
     try:
         record = await agent_svc.get_by_agent_id(agent_id)
     except KeyError:
@@ -238,26 +343,48 @@ async def run_agent_public(agent_id: str, body: RunRequest) -> JSONResponse:
             env_vars=body.params,
         )
     except Exception as e:
+        logger.exception("Erreur Run: %s", e)
         raise HTTPException(500, detail=str(e))
 
     _manifests[manifest.run_id] = manifest.to_dict()
     ngrok_url = get_ngrok_url()
 
+    # ── Update run metrics (usage_count, tasks_performed, avg_response_time) ──
+    agent_svc.update_run_metrics(
+        agent_id,
+        success=manifest.status not in ("error", "failed"),
+        duration_sec=manifest.duration_sec,
+    )
+
+    # ── Trigger validation if buyer has paid ─────────────────────────────────
+    if manifest.proxy_cid and body.buyer_wallet:
+        grant = access_repo.get_access_grant(agent_id, body.buyer_wallet)
+        if grant:
+            val_task_id = f"val-{manifest.run_id[:16]}"
+            access_repo.upsert_validation_session(
+                agent_id, val_task_id=val_task_id, status="pending"
+            )
+            from app.services.judge_service import run_validation
+            bg.add_task(run_validation, agent_id, val_task_id, manifest.proxy_cid)
+            logger.info("Validation triggered for agent=%s cid=%s", agent_id, manifest.proxy_cid)
+
     return JSONResponse({
-        "run_id":        manifest.run_id,
-        "agent_id":      agent_id,
-        "token_id":      manifest.token_id,
-        "docker_image":  manifest.docker_image,
-        "status":        manifest.status,
-        "output":        manifest.output,
-        "manifest_hash": manifest.manifest_hash,
-        "platform_sig":  manifest.platform_sig,
-        "duration_sec":  manifest.duration_sec,
-        "error":         manifest.error,
-        "endpoint":      f"{ngrok_url}/api/v1/agents/{agent_id}/run" if ngrok_url else None,
-        "proxy_hash":    manifest.proxy_hash,
-        "proxy_cid":     manifest.proxy_cid,
-        "proxy_metrics": manifest.proxy_metrics,
+        "run_id":            manifest.run_id,
+        "agent_id":          agent_id,
+        "token_id":          manifest.token_id,
+        "docker_image":      manifest.docker_image,
+        "status":            manifest.status,
+        "output":            manifest.output,
+        "manifest_hash":     manifest.manifest_hash,
+        "platform_sig":      manifest.platform_sig,
+        "duration_sec":      manifest.duration_sec,
+        "error":             manifest.error,
+        "endpoint":          f"{ngrok_url}/api/v1/agents/{agent_id}/run" if ngrok_url else None,
+        "proxy_hash":        manifest.proxy_hash,
+        "proxy_cid":         manifest.proxy_cid,
+        "proxy_metrics":     manifest.proxy_metrics,
+        "validation_started": bool(manifest.proxy_cid and body.buyer_wallet
+                                   and access_repo.get_access_grant(agent_id, body.buyer_wallet or "")),
     })
 
 
@@ -267,3 +394,283 @@ async def _bg_sandbox(record: AgentRecord, inp: SandboxInput) -> None:
         _manifests[m.run_id] = m.to_dict()
     except Exception:
         logger.exception("BG sandbox failed for %s", record.agent_id)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  BUYER — Purchase & Validation endpoints
+# ═════════════════════════════════════════════════════════════════════════════
+
+@router.get("/{agent_id}/purchase-info")
+async def get_purchase_info(agent_id: str) -> PurchaseInfoResponse:
+    """
+    Returns everything the frontend needs to build the MetaMask transaction:
+    - a unique task_id
+    - the exact ETH amount required (read from IdentityRegistry via web3)
+    - the EscrowManager address
+    - the encoded calldata for depositPayment()
+    """
+    try:
+        record = await agent_svc.get_by_agent_id(agent_id)
+    except KeyError:
+        raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
+
+    task_id = f"task-{uuid.uuid4().hex[:16]}"
+
+    # Determine price in wei
+    price_eth = record.price_per_task or 0.0
+    price_wei = int(price_eth * 10**18)
+
+    # Build calldata for depositPayment(taskId_, agentId_)
+    escrow_address = _settings.escrow_manager_address or ""
+    call_data = "0x"
+    if escrow_address:
+        try:
+            w3 = Web3(Web3.HTTPProvider(_settings.rpc_url))
+            escrow = w3.eth.contract(
+                address=Web3.to_checksum_address(escrow_address),
+                abi=_ESCROW_DEPOSIT_ABI,
+            )
+            call_data = escrow.encode_abi("depositPayment", args=[task_id, agent_id])
+        except Exception as e:
+            logger.warning("Could not encode calldata: %s", e)
+
+    return PurchaseInfoResponse(
+        task_id=task_id,
+        agent_id=agent_id,
+        required_wei=hex(price_wei),
+        required_eth=price_eth,
+        escrow_address=escrow_address,
+        call_data=call_data,
+    )
+
+
+@router.post("/{agent_id}/purchase")
+async def purchase_agent(
+    agent_id: str,
+    body: PurchaseRequest,
+) -> PurchaseResponse:
+    """
+    Called after buyer's MetaMask tx is confirmed.
+    Grants access — validation fires after the first Run (needs proxy_cid).
+    """
+    try:
+        await agent_svc.get_by_agent_id(agent_id)
+    except KeyError:
+        raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
+
+    # Check not already purchased by this buyer
+    existing = access_repo.get_access_grant(agent_id, body.buyer_wallet)
+    if existing:
+        return PurchaseResponse(
+            access_id=existing["id"],
+            agent_id=agent_id,
+            task_id=existing["task_id"],
+            tx_hash=existing["tx_hash"] or body.tx_hash,
+            status="granted",
+            validation_status=_get_val_status(agent_id),
+        )
+
+    access_id = access_repo.create_access_grant(
+        agent_id=agent_id,
+        buyer_wallet=body.buyer_wallet,
+        task_id=body.task_id,
+        tx_hash=body.tx_hash,
+    )
+
+    # Validation is NOT triggered here — it fires after the first Run
+    # so judges have a real proxy trace (proxy_cid) to evaluate.
+    access_repo.upsert_validation_session(
+        agent_id, val_task_id=None, status="awaiting_run"
+    )
+
+    return PurchaseResponse(
+        access_id=access_id,
+        agent_id=agent_id,
+        task_id=body.task_id,
+        tx_hash=body.tx_hash,
+        status="granted",
+        validation_status="awaiting_run",
+    )
+
+
+@router.get("/{agent_id}/access")
+async def check_access(
+    agent_id: str,
+    buyer_wallet: str = Query(description="Buyer Ethereum address"),
+) -> JSONResponse:
+    """Check whether a buyer has paid for this agent."""
+    grant = access_repo.get_access_grant(agent_id, buyer_wallet)
+    if not grant:
+        return JSONResponse(AccessStatus(
+            agent_id=agent_id,
+            buyer_wallet=buyer_wallet,
+            has_access=False,
+        ).model_dump())
+
+    val_status = _get_val_status(agent_id)
+    return JSONResponse(AccessStatus(
+        agent_id=agent_id,
+        buyer_wallet=buyer_wallet,
+        has_access=True,
+        task_id=grant["task_id"],
+        tx_hash=grant["tx_hash"],
+        validation_status=val_status,
+    ).model_dump())
+
+
+@router.get("/{agent_id}/validation")
+async def get_validation(agent_id: str) -> ValidationStatusResponse:
+    """Return the validation status and judge verdicts for an agent."""
+    session  = access_repo.get_validation_session(agent_id)
+    verdicts = access_repo.get_judge_verdicts(agent_id)
+
+    if not session:
+        return ValidationStatusResponse(agent_id=agent_id, status="not_started")
+
+    return ValidationStatusResponse(
+        agent_id=agent_id,
+        status=session["status"],
+        consensus_verdict=session["consensus_verdict"],
+        aggregated_score=session["aggregated_score"],
+        started_at=session["started_at"],
+        finished_at=session["finished_at"],
+        judges=[
+            JudgeVerdictOut(
+                judge_id=v["judge_id"],
+                judge_name=v["judge_name"],
+                score=v["score"],
+                justification=v["justification"],
+                verdict=v["verdict"],
+            )
+            for v in verdicts
+        ],
+    )
+
+
+@router.post("/{agent_id}/validate", tags=["dev"])
+async def trigger_validation(agent_id: str, bg: BackgroundTasks) -> JSONResponse:
+    """Dev endpoint: manually trigger validation for an agent without payment."""
+    try:
+        await agent_svc.get_by_agent_id(agent_id)
+    except KeyError:
+        raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
+
+    val_task_id = f"val-dev-{uuid.uuid4().hex[:12]}"
+    access_repo.upsert_validation_session(agent_id, val_task_id=val_task_id, status="pending")
+
+    # Use a placeholder CID for dev trigger — judges will get minimal trace data
+    dev_proxy_cid = f"QmDEV{uuid.uuid4().hex[:40]}"
+    from app.services.judge_service import run_validation
+    bg.add_task(run_validation, agent_id, val_task_id, dev_proxy_cid)
+
+    return JSONResponse({"agent_id": agent_id, "val_task_id": val_task_id, "status": "validation_started"})
+
+
+# ── Reputation ────────────────────────────────────────────────────────────────
+
+@router.get("/{agent_id}/reputation")
+async def get_agent_reputation(agent_id: str):
+    """
+    Return on-chain reputation signals for an agent, aggregated by tag1.
+
+    Signals are indexed from ReputationRegistry NewFeedback events:
+      - successRate : judge verdicts from ValidationRegistry
+      - starred     : user ratings (1-5 stars, stored as 20-100)
+      - eigenTrust  : platform EigenTrust score (Phase 2)
+    """
+    from app.db.identity_repo import get_agent_identity
+    from app.db.reputation_repo import get_aggregated_score, get_reputation_signals
+
+    identity = get_agent_identity(agent_id)
+    if not identity:
+        raise HTTPException(404, detail=f"Agent {agent_id!r} not found")
+
+    token_id = identity.get("current_token_id")
+    if not token_id:
+        return JSONResponse({
+            "agent_id":  agent_id,
+            "token_id":  None,
+            "signals":   [],
+            "aggregated": {},
+            "message":  "Agent not yet registered on-chain",
+        })
+
+    aggregated = get_aggregated_score(token_id)
+    signals    = get_reputation_signals(token_id)
+
+    return JSONResponse({
+        "agent_id":   agent_id,
+        "token_id":   token_id,
+        "aggregated": aggregated,
+        "signals":    signals,
+    })
+
+
+@router.get("/{agent_id}/feedback-info")
+async def get_feedback_info(
+    agent_id: str,
+    score: int = Query(..., ge=1, le=5, description="Note 1-5 étoiles"),
+):
+    """
+    Retourne le calldata encodé pour que le frontend puisse appeler
+    giveFeedback() via MetaMask (msg.sender = adresse user = clientAddress).
+
+    score 1-5 → value = score × 20  (range 20-100, valueDecimals=0, tag1="starred")
+
+    Flux frontend :
+      1. GET /agents/{id}/feedback-info?score=4
+      2. Signer + envoyer la tx avec MetaMask (to=reputation_address, data=call_data)
+      3. L'indexer capte le NewFeedback event → reputation_events mis à jour
+    """
+    from app.db.identity_repo import get_agent_identity
+
+    identity = get_agent_identity(agent_id)
+    if not identity:
+        raise HTTPException(404, detail=f"Agent {agent_id!r} introuvable")
+
+    token_id = identity.get("current_token_id")
+    if not token_id:
+        raise HTTPException(400, detail="Agent non encore enregistré on-chain")
+
+    reputation_address = _settings.reputation_registry_address or ""
+    call_data = "0x"
+
+    if reputation_address:
+        try:
+            w3 = Web3(Web3.HTTPProvider(_settings.rpc_url))
+            rep = w3.eth.contract(
+                address=Web3.to_checksum_address(reputation_address),
+                abi=_REPUTATION_GIVE_FEEDBACK_ABI,
+            )
+            value_on_chain = score * 20   # 1★=20, 2★=40, 3★=60, 4★=80, 5★=100
+            call_data = rep.encode_abi(
+                "giveFeedback",
+                args=[
+                    token_id,         # agentId (uint256 = tokenId)
+                    value_on_chain,   # value (int128)
+                    0,                # valueDecimals
+                    "starred",        # tag1
+                    "",               # tag2
+                    "",               # endpoint
+                    "",               # feedbackURI
+                    b"\x00" * 32,     # feedbackHash
+                ],
+            )
+        except Exception as e:
+            logger.warning("feedback-info encode error: %s", e)
+
+    return JSONResponse({
+        "agent_id":           agent_id,
+        "token_id":           token_id,
+        "score":              score,
+        "value_on_chain":     score * 20,
+        "reputation_address": reputation_address,
+        "call_data":          call_data,
+    })
+
+
+# ── Internal helper ───────────────────────────────────────────────────────────
+
+def _get_val_status(agent_id: str) -> str:
+    session = access_repo.get_validation_session(agent_id)
+    return session["status"] if session else "not_started"

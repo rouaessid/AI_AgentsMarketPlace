@@ -78,7 +78,7 @@ async def _start_cloudflare_tunnel() -> str | None:
             _cf_process = subprocess.Popen(
                 [
                     cf_path, "tunnel", "--url",
-                    f"http://localhost:{settings.backend_port}",
+                    f"http://127.0.0.1:{settings.backend_port}",
                     "--no-autoupdate",
                 ],
                 stdout=subprocess.PIPE,

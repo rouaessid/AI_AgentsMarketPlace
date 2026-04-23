@@ -1,0 +1,48 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "agent_id": "judge-beta",
+  "name": "Judge Beta",
+  "description": "Independent AI judge using pure LLM reasoning — no external search. Evaluates agent output for correctness, completeness, coherence, and absence of hallucinations using Groq (Llama-3.3-70b).",
+  "version": "1.0.0",
+  "agent_type": "judge",
+  "docker_image": "agentmarket/judge-beta:v1",
+  "image_url": null,
+  "llm_model": "llama-3.3-70b-versatile",
+  "framework": "groq_raw",
+  "language": "python",
+  "services": [
+    {
+      "name": "run",
+      "endpoint": "/api/v1/agents/judge-beta/run",
+      "version": "1.0.0",
+      "skills": ["evaluation", "reasoning", "output-analysis"]
+    }
+  ],
+  "supported_tasks": [
+    "validate",
+    "score",
+    "evaluate"
+  ],
+  "special_caps": [
+    "trace-evaluation",
+    "pure-llm-reasoning",
+    "hallucination-detection",
+    "commit-reveal-voting"
+  ],
+  "env_var_keys": [
+    "GROQ_API_KEY"
+  ],
+  "pricing": {
+    "price_per_task": 0.0,
+    "currency": "ETH",
+    "note": "Judge agents earn validation fees from the protocol, not from buyers"
+  },
+  "stake_amount": 0.1,
+  "cpu_limit": 1,
+  "ram_limit_mb": 512,
+  "timeout_sec": 60,
+  "readme": "# Judge Beta — Pure LLM Reasoning Judge\n\n## Overview\nJudge Beta is a validation agent that evaluates AI agent execution traces using pure LLM reasoning — no external search calls. It focuses on output correctness, coherence, and hallucination detection.\n\n## Evaluation Criteria\n1. Did the agent actually answer the task?\n2. Is the output coherent and free of hallucinations?\n3. Were the tools used appropriately?\n4. Are there signs of failure (empty output, errors, nonsensical response)?\n\n## Input Format (prompt field, JSON-serialized)\n```json\n{\n  \"task_prompt\": \"What are AI trends in 2025?\",\n  \"agent_output\": \"{...}\",\n  \"trajectory\": [...],\n  \"tools_used\": 5,\n  \"llm_calls\": 3,\n  \"search_calls\": 2,\n  \"errors_count\": 0,\n  \"duration_sec\": 12.5,\n  \"total_tokens\": 3200\n}\n```\n\n## Output Format\n```json\n{\n  \"judge_id\": \"judge-beta\",\n  \"score\": 78,\n  \"verdict\": \"VALID\",\n  \"justification\": \"The agent correctly answered the research question...\"\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n",
+  "badges": ["Judge", "Verified"],
+  "categories": ["validation", "quality-assurance"],
+  "active": true
+}

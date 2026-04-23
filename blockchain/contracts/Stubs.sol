@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.25;
 
+// ════════════════════════════════════════════════════════════════════════════
+//  Stubs.sol — TEST ONLY
+//  Ces stubs sont exclusivement utilisés dans les tests unitaires Hardhat.
+//  En production, utiliser les vrais contrats :
+//    ReputationRegistry → ReputationRegistry.sol (ERC-8004)
+//    IdentityRegistry   → IdentityRegistry.sol
+// ════════════════════════════════════════════════════════════════════════════
+
 contract IdentityRegistryStub {
     struct Agent {
         bool exists;
@@ -10,7 +18,8 @@ contract IdentityRegistryStub {
         uint256 tokenId;
     }
 
-    mapping(string => Agent) public agents;
+    mapping(string  => Agent)   public agents;
+    mapping(uint256 => address) private _tokenOwner; // tokenId → owner (pour ownerOf)
 
     function registerAgent(
         string calldata agentId,
@@ -25,6 +34,14 @@ contract IdentityRegistryStub {
             wallet: wallet_,
             tokenId: tokenId_
         });
+        _tokenOwner[tokenId_] = wallet_;
+    }
+
+    /// @notice ERC-721 ownerOf — nécessaire pour ReputationRegistry.giveFeedback
+    function ownerOf(uint256 tokenId) external view returns (address) {
+        address owner = _tokenOwner[tokenId];
+        require(owner != address(0), "IdentityRegistryStub: token does not exist");
+        return owner;
     }
 
     function setActive(string calldata agentId, bool status) external {

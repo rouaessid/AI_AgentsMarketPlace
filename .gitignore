@@ -61,6 +61,7 @@ cache/
 typechain-types/
 deployments/
 hardhat.config.js.backup
+blockchain/hardhat-state.json
 
 # Node.js (if applicable)
 node_modules/

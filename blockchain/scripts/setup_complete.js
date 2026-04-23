@@ -1,11 +1,24 @@
 // scripts/setup_complete.js
-const { ethers } = require("hardhat");
-const fs = require("fs");
-const path = require("path");
+const hre           = require("hardhat");
+const { ethers }    = require("hardhat");
+const fs            = require("fs");
+const path          = require("path");
+
+const NETWORK_CONFIG = {
+  hardhat:       { rpcUrl: "http://127.0.0.1:8545",                chainId: 31337 },
+  localhost:     { rpcUrl: "http://127.0.0.1:8545",                chainId: 31337 },
+  polygonMumbai: { rpcUrl: process.env.POLYGON_MUMBAI_RPC_URL || "https://rpc-mumbai.maticvigil.com", chainId: 80001 },
+  polygon:       { rpcUrl: process.env.POLYGON_RPC_URL        || "https://polygon-rpc.com",           chainId: 137   },
+  sepolia:       { rpcUrl: process.env.SEPOLIA_RPC_URL        || "",                                   chainId: 11155111 },
+};
 
 async function main() {
   const [deployer] = await ethers.getSigners();
+  const networkName = hre.network.name;
+  const netConfig   = NETWORK_CONFIG[networkName] || { rpcUrl: "", chainId: 0 };
+
   console.log("\n🚀 Démarrage du déploiement complet et liaison...");
+  console.log(`Réseau   : ${networkName} (chainId ${netConfig.chainId})`);
   console.log(`Deployer : ${deployer.address}\n`);
 
   // 1. Déploiement IdentityRegistry
@@ -29,41 +42,62 @@ async function main() {
   const escrowAddr = await escrow.getAddress();
   console.log(`✅ EscrowManager    : ${escrowAddr}`);
 
-  // 4. Déploiement ValidationRegistry (placeholder pour Reputation)
+  // 4. Déploiement ReputationRegistry (ERC-8004 — vrai contrat)
+  const Reputation = await ethers.getContractFactory("ReputationRegistry");
+  const reputation = await Reputation.deploy();
+  await reputation.waitForDeployment();
+  const reputationAddr = await reputation.getAddress();
+  console.log(`✅ ReputationRegistry (ERC-8004): ${reputationAddr}`);
+
+  // 5. Déploiement ValidationRegistry
   const ValidationValue = await ethers.getContractFactory("ValidationRegistry");
-  const validation = await ValidationValue.deploy(identityAddr, stakingAddr, deployer.address);
+  const validation = await ValidationValue.deploy(identityAddr, stakingAddr, reputationAddr);
   await validation.waitForDeployment();
   const validationAddr = await validation.getAddress();
   console.log(`✅ ValidationRegistry: ${validationAddr}`);
 
   console.log("\n🔗 Liaison des contrats...");
 
-  // Liaison Staking -> Validation
+  // Staking → ValidationRegistry
   await (await staking.setValidationRegistry(validationAddr)).wait();
   console.log("  - StakingContract lié à ValidationRegistry");
 
-  // Liaison Validation -> Escrow
+  // ValidationRegistry → EscrowManager
   await (await validation.setEscrowManager(escrowAddr)).wait();
   console.log("  - ValidationRegistry lié à EscrowManager");
 
-  // Liaison Escrow -> Validation
+  // EscrowManager → ValidationRegistry
   await (await escrow.setValidationRegistry(validationAddr)).wait();
   console.log("  - EscrowManager lié à ValidationRegistry");
+
+  // EscrowManager → IdentityRegistry (price verification)
+  await (await escrow.setIdentityRegistry(identityAddr)).wait();
+  console.log("  - EscrowManager lié à IdentityRegistry (vérification prix)");
+
+  // ReputationRegistry → initialize(IdentityRegistry)
+  await (await reputation.initialize(identityAddr)).wait();
+  console.log("  - ReputationRegistry initialisé avec IdentityRegistry");
+
+  // ReputationRegistry → autoriser ValidationRegistry à appeler recordReputation()
+  await (await reputation.setAuthorizedCaller(validationAddr, true)).wait();
+  console.log("  - ValidationRegistry autorisé comme caller de ReputationRegistry");
 
   // 5. Mise à jour de deployment.json
   const deploymentPath = path.join(__dirname, "../deployments/deployment.json");
   const deployment = {
-    network: "localhost",
-    chainId: 31337,
+    network:    networkName,
+    chainId:    netConfig.chainId,
     deployedAt: new Date().toISOString(),
-    deployer: deployer.address,
+    deployer:   deployer.address,
     contracts: {
-      IdentityRegistry: { address: identityAddr },
-      StakingContract: { address: stakingAddr },
-      EscrowManager: { address: escrowAddr },
+      IdentityRegistry:   { address: identityAddr },
+      StakingContract:    { address: stakingAddr },
+      EscrowManager:      { address: escrowAddr },
+      ReputationRegistry: { address: reputationAddr },
       ValidationRegistry: { address: validationAddr }
     }
   };
+  fs.mkdirSync(path.dirname(deploymentPath), { recursive: true });
   fs.writeFileSync(deploymentPath, JSON.stringify(deployment, null, 2));
   console.log("\n💾 deployment.json mis à jour.");
 
@@ -71,12 +105,18 @@ async function main() {
   const envPath = path.join(__dirname, "../../.env");
   if (fs.existsSync(envPath)) {
     let envContent = fs.readFileSync(envPath, "utf8");
-    
+
     const replacements = {
-      "IDENTITY_REGISTRY_ADDRESS": identityAddr,
-      "STAKING_CONTRACT_ADDRESS": stakingAddr,
+      "IDENTITY_REGISTRY_ADDRESS":   identityAddr,
+      "STAKING_CONTRACT_ADDRESS":    stakingAddr,
       "VALIDATION_REGISTRY_ADDRESS": validationAddr,
-      "ESCROW_MANAGER_ADDRESS": escrowAddr
+      "ESCROW_MANAGER_ADDRESS":      escrowAddr,
+      "REPUTATION_REGISTRY_ADDRESS": reputationAddr,
+      // Réseau — mis à jour seulement si on déploie hors localhost
+      ...(networkName !== "localhost" && networkName !== "hardhat" ? {
+        "RPC_URL":  netConfig.rpcUrl,
+        "CHAIN_ID": String(netConfig.chainId),
+      } : {}),
     };
 
     for (const [key, value] of Object.entries(replacements)) {
@@ -96,10 +136,12 @@ async function main() {
   console.log("\n📋 Récapitulatif des adresses :");
   console.log(`  IDENTITY_REGISTRY_ADDRESS   : ${identityAddr}`);
   console.log(`  STAKING_CONTRACT_ADDRESS    : ${stakingAddr}`);
-  console.log(`  VALIDATION_REGISTRY_ADDRESS : ${validationAddr}`);
   console.log(`  ESCROW_MANAGER_ADDRESS      : ${escrowAddr}`);
+  console.log(`  REPUTATION_REGISTRY_ADDRESS : ${reputationAddr}`);
+  console.log(`  VALIDATION_REGISTRY_ADDRESS : ${validationAddr}`);
   console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("🚀 TOUT EST PRÊT ! Vous pouvez lancer le frontend.");
+  console.log("🚀 TOUT EST PRÊT ! Lance le backend :");
+  console.log("   cd backend && uvicorn app.main:app --reload --port 8000");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 }
 
