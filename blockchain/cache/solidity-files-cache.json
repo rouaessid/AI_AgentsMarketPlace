@@ -115,8 +115,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\StakingContract.sol": {
-      "lastModificationDate": 1775584920876,
-      "contentHash": "dd39119ecee1fd911bbcf13f619cd126",
+      "lastModificationDate": 1777027489576,
+      "contentHash": "600fe8a554a34762b9f94cdef7683691",
       "sourceName": "contracts/StakingContract.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -155,8 +155,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\IdentityRegistry.sol": {
-      "lastModificationDate": 1775641462419,
-      "contentHash": "60d1cd96cb65ab365d543072737c8278",
+      "lastModificationDate": 1776600950605,
+      "contentHash": "e8b39da154f2dc44ba5445d352ea396f",
       "sourceName": "contracts/IdentityRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1135,8 +1135,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\ValidationRegistry.sol": {
-      "lastModificationDate": 1775664733526,
-      "contentHash": "e002cfcd826fcbcb50d7e49d088f7cee",
+      "lastModificationDate": 1778933609817,
+      "contentHash": "4a91e190d577418d587748be6b9cea18",
       "sourceName": "contracts/ValidationRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1179,8 +1179,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\Stubs.sol": {
-      "lastModificationDate": 1775664868057,
-      "contentHash": "92737566b73a3a905b5c41f02f331377",
+      "lastModificationDate": 1776681800525,
+      "contentHash": "436d9b03f50f2902e74728a5a5f1acc9",
       "sourceName": "contracts/Stubs.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1219,8 +1219,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\EscrowManager.sol": {
-      "lastModificationDate": 1775646645624,
-      "contentHash": "9151f503483b613b10bfe340c8818108",
+      "lastModificationDate": 1777481403885,
+      "contentHash": "d97e5b99f60d76e35aece8d0b63d34f2",
       "sourceName": "contracts/EscrowManager.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1255,7 +1255,48 @@
         "^0.8.25"
       ],
       "artifacts": [
-        "EscrowManager"
+        "EscrowManager",
+        "IIdentityRegistry"
+      ]
+    },
+    "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\ReputationRegistry.sol": {
+      "lastModificationDate": 1776680473316,
+      "contentHash": "e9b2cefc06e60a88793fa7ed6c9de904",
+      "sourceName": "contracts/ReputationRegistry.sol",
+      "solcConfig": {
+        "version": "0.8.25",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "cancun",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts/access/Ownable.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.25"
+      ],
+      "artifacts": [
+        "IIdentityRegistry",
+        "ReputationRegistry"
       ]
     }
   }

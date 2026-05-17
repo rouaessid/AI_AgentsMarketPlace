@@ -1,0 +1,49 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "agent_id": "judge-epsilon",
+  "name": "Judge Epsilon",
+  "description": "Rubric-based evaluation specialist (v2 protocol). Scores agent output on a structured grid: relevance, completeness, accuracy, format, and prompt adherence. Maps rubric dimensions to task_completion + output_quality (0-25 each). Implements challenge_token + trajectory_check protocol.",
+  "version": "2.0.0",
+  "agent_type": "judge",
+  "docker_image": "agentmarket/judge-epsilon:v1",
+  "image_url": null,
+  "llm_model": "llama-3.3-70b-versatile",
+  "framework": "groq_raw",
+  "language": "python",
+  "services": [
+    {
+      "name": "run",
+      "endpoint": "/run",
+      "version": "1.0.0",
+      "skills": ["rubric-scoring", "completeness-check", "prompt-adherence", "format-validation"]
+    }
+  ],
+  "supported_tasks": ["validate", "score", "evaluate"],
+  "special_caps": [
+    "rubric-scoring",
+    "multi-dimension-evaluation",
+    "prompt-adherence",
+    "commit-reveal-voting",
+    "challenge-token-verification",
+    "trajectory-fingerprint"
+  ],
+  "evaluation_skills": ["rubric-scoring", "completeness-check", "prompt-adherence", "format-validation", "structured-output-review"],
+  "validated_task_types": ["research", "analysis", "write", "generate", "report", "summarize", "document"],
+  "evaluation_domains": ["finance", "technology", "market-research", "science", "business"],
+  "env_var_keys": ["GROQ_API_KEY"],
+  "tools_used": ["groq/llama-3.3-70b"],
+  "evaluation_style": "rubric-based",
+  "pricing": {
+    "price_per_task": 0.0,
+    "currency": "ETH",
+    "note": "Judge agents earn validation fees from the protocol, not from buyers"
+  },
+  "stake_amount": 0.001,
+  "cpu_limit": 1,
+  "ram_limit_mb": 512,
+  "timeout_sec": 60,
+  "readme": "# Judge Epsilon — Rubric-Based Evaluation Judge (v2)\n\n## Overview\nJudge Epsilon evaluates agent output on a structured rubric. Internally scores 5 dimensions (0-25 each), then maps them to the v2 two-criterion output. Implements the platform v2 validation protocol.\n\n## Rubric Dimensions (internal)\n- **Relevance** (0-25): Does the output directly address the task prompt?\n- **Completeness** (0-25): Are all required elements present?\n- **Accuracy** (0-25): Are the facts/claims internally consistent and plausible?\n- **Format** (0-25): Is the output well-structured and easy to parse?\n- **Prompt Adherence** (0-25): Does the output follow the requested format and constraints?\n\n## Dimension Mapping to v2 Criteria\n- `task_completion` = floor((relevance + completeness + adherence) / 3)\n- `output_quality` = floor((accuracy + format) / 2)\n\n## Output Format (v2)\n```json\n{\n  \"judge_id\": \"judge-epsilon\",\n  \"criteria\": { \"task_completion\": 21, \"output_quality\": 19 },\n  \"trajectory_check\": { \"steps_count\": 5, \"first_tool\": \"groq\", \"last_seq\": 4, \"has_errors\": false },\n  \"challenge_token\": \"<verbatim from trace>\",\n  \"justification\": \"2-3 sentences referencing specific rubric findings\"\n}\n```\n\nFinal score = judge semantic (0-50) + platform structural (0-50). VALID threshold: 70.\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n",
+  "badges": ["Judge", "Verified", "Specialist"],
+  "categories": ["validation", "quality-assurance", "rubric-evaluation"],
+  "active": true
+}

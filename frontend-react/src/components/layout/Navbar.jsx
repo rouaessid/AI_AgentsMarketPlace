@@ -7,27 +7,23 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 
-const NAV_BUYER = [
+const NAV_BASE = [
   { to: '/marketplace', label: 'Marketplace', icon: Store },
-  { to: '/solutions', label: 'Orchestrator', icon: Sparkles }
+  { to: '/orchestrator', label: 'Orchestrator', icon: Sparkles },
 ]
-const NAV_PROVIDER = [
-  { to: '/marketplace', label: 'Marketplace', icon: Store },
-  { to: '/solutions', label: 'Orchestrator', icon: Sparkles },
-  { to: '/seller', label: 'My Agents', icon: LayoutDashboard },
-]
+const NAV_SELLER = { to: '/seller', label: 'My Agents', icon: LayoutDashboard }
 
 export default function Navbar() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const { user, walletAddress, isLoggedIn, isProvider, logout,
-    connectWallet, disconnectWallet, openAuthModal, switchRole } = useAuth()
+  const { user, walletAddress, isLoggedIn, isProvider, isBuyer, logout, connectWallet, openAuthModal } = useAuth()
 
-  const [open, setOpen] = useState(false)
+  const [open,     setOpen]     = useState(false)
   const [showMenu, setShowMenu] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied,   setCopied]   = useState(false)
   const menuRef = useRef(null)
-  const NAV = isProvider ? NAV_PROVIDER : NAV_BUYER
+
+  const NAV = isProvider ? [...NAV_BASE, NAV_SELLER] : NAV_BASE
 
   useEffect(() => {
     const h = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setShowMenu(false) }
@@ -45,8 +41,13 @@ export default function Navbar() {
   function handleLogout() { logout(); setShowMenu(false); navigate('/') }
 
   const short = walletAddress ? `${walletAddress.slice(0, 6)}…${walletAddress.slice(-4)}` : null
-  const roleColor = isProvider ? '#7c3aed' : '#6366f1'
-  const RoleIcon = isProvider ? Cpu : ShoppingBag
+
+  // Role badge: show both when applicable
+  const roleBadge = isProvider && isBuyer
+    ? { label: 'Provider & Buyer', color: '#7c3aed' }
+    : isProvider
+    ? { label: 'Provider', color: '#7c3aed' }
+    : { label: 'Buyer', color: '#6366f1' }
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-am-border">
@@ -72,10 +73,11 @@ export default function Navbar() {
             const active = pathname.startsWith(to)
             return (
               <Link key={to} to={to}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${active
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${
+                  active
                     ? 'bg-indigo-50 text-am-indigo-d border border-indigo-200/80'
                     : 'text-am-text-2 hover:text-am-text hover:bg-am-surface'
-                  }`}
+                }`}
               >
                 <Icon size={15} /> {label}
               </Link>
@@ -91,13 +93,13 @@ export default function Navbar() {
                 className="flex items-center gap-2.5 text-sm font-medium px-3 py-2 rounded-xl border border-am-border bg-am-surface hover:bg-white hover:shadow-card transition-all duration-200"
               >
                 <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white"
-                  style={{ background: `linear-gradient(135deg,${roleColor},#6366f1)` }}>
-                  {(user.name || 'U').charAt(0).toUpperCase()}
+                  style={{ background: `linear-gradient(135deg,${roleBadge.color},#6366f1)` }}>
+                  {short?.slice(0, 2) ?? 'W'}
                 </div>
-                <span className="text-am-text max-w-[100px] truncate">{user.name}</span>
+                <span className="text-am-text max-w-[90px] truncate font-mono text-xs">{short}</span>
                 <span className="text-xs px-2 py-0.5 rounded-full font-medium border"
-                  style={{ background: `${roleColor}10`, color: roleColor, borderColor: `${roleColor}30` }}>
-                  {isProvider ? 'Provider' : 'Buyer'}
+                  style={{ background: `${roleBadge.color}10`, color: roleBadge.color, borderColor: `${roleBadge.color}30` }}>
+                  {roleBadge.label}
                 </span>
                 <ChevronDown size={12} className="text-am-muted" />
               </button>
@@ -111,63 +113,36 @@ export default function Navbar() {
                     transition={{ duration: 0.15 }}
                     className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-am-border shadow-card-lg overflow-hidden"
                   >
-                    {/* User info */}
+                    {/* Wallet info */}
                     <div className="px-4 py-3.5 border-b border-am-border">
-                      <div className="font-semibold text-am-text text-sm">{user.name}</div>
-                      {user.email && <div className="text-xs text-am-muted mt-0.5">{user.email}</div>}
-                      <div className="flex items-center gap-1.5 mt-2">
-                        <RoleIcon size={11} style={{ color: roleColor }} />
-                        <span className="text-xs font-medium" style={{ color: roleColor }}>
-                          {isProvider ? 'Provider' : 'Buyer'}
-                        </span>
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <span className="w-2 h-2 rounded-full bg-am-emerald animate-pulse-slow" />
+                        <span className="text-xs text-am-emerald font-medium">Wallet connected</span>
                       </div>
-                    </div>
-
-                    {/* Wallet */}
-                    <div className="px-4 py-3 border-b border-am-border">
-                      {walletAddress ? (
-                        <>
-                          <div className="flex items-center gap-1.5 mb-1.5">
-                            <span className="w-2 h-2 rounded-full bg-am-emerald animate-pulse-slow" />
-                            <span className="text-xs text-am-emerald font-medium">Wallet connected</span>
-                          </div>
-                          <div className="flex items-center justify-between bg-am-surface rounded-lg px-3 py-2">
-                            <span className="text-xs font-mono text-am-text-2">{short}</span>
-                            <button onClick={copyAddress} className="text-am-muted hover:text-am-text transition-colors">
-                              {copied ? <Check size={13} className="text-am-emerald" /> : <Copy size={13} />}
-                            </button>
-                          </div>
-                          <button onClick={() => { disconnectWallet(); setShowMenu(false) }}
-                            className="text-xs text-am-muted hover:text-am-rose transition-colors mt-1.5 block">
-                            Disconnect wallet
-                          </button>
-                        </>
-                      ) : (
-                        <button onClick={() => { connectWallet(); setShowMenu(false) }}
-                          className="flex items-center gap-2 text-xs text-am-indigo hover:opacity-80 transition-opacity py-1 font-medium">
-                          <Wallet size={13} /> Connect MetaMask
+                      <div className="flex items-center justify-between bg-am-surface rounded-lg px-3 py-2 mb-2">
+                        <span className="text-xs font-mono text-am-text-2">{short}</span>
+                        <button onClick={copyAddress} className="text-am-muted hover:text-am-text transition-colors">
+                          {copied ? <Check size={13} className="text-am-emerald" /> : <Copy size={13} />}
                         </button>
-                      )}
-                    </div>
-
-                    {/* Switch role */}
-                    <div className="px-2 py-2 border-b border-am-border">
-                      <div className="text-xs text-am-muted px-2 mb-1.5 font-medium">Switch role</div>
-                      {[
-                        { v: 'buyer', label: 'Buyer', icon: ShoppingBag, color: '#6366f1' },
-                        { v: 'provider', label: 'Provider', icon: Cpu, color: '#7c3aed' },
-                      ].map(({ v, label, icon: Icon, color }) => (
-                        <button key={v}
-                          onClick={() => { switchRole(v); setShowMenu(false) }}
-                          className={`w-full flex items-center gap-2.5 px-2 py-2 rounded-xl text-sm transition-all ${user.role === v ? 'font-medium' : 'text-am-text-2 hover:text-am-text hover:bg-am-surface'
-                            }`}
-                          style={user.role === v ? { background: `${color}08`, color } : {}}
-                        >
-                          <Icon size={13} style={{ color: user.role === v ? color : undefined }} />
-                          {label}
-                          {user.role === v && <Check size={11} className="ml-auto" style={{ color }} />}
-                        </button>
-                      ))}
+                      </div>
+                      {/* Roles */}
+                      <div className="flex gap-1.5 flex-wrap">
+                        {isProvider && (
+                          <span className="text-xs px-2 py-0.5 rounded-full font-medium border"
+                            style={{ background: '#7c3aed10', color: '#7c3aed', borderColor: '#7c3aed30' }}>
+                            <Cpu size={9} className="inline mr-1" />Provider
+                          </span>
+                        )}
+                        {isBuyer && (
+                          <span className="text-xs px-2 py-0.5 rounded-full font-medium border"
+                            style={{ background: '#6366f110', color: '#6366f1', borderColor: '#6366f130' }}>
+                            <ShoppingBag size={9} className="inline mr-1" />Buyer
+                          </span>
+                        )}
+                        {!isProvider && !isBuyer && (
+                          <span className="text-xs text-am-muted">No role yet</span>
+                        )}
+                      </div>
                     </div>
 
                     <button onClick={handleLogout}
@@ -180,11 +155,11 @@ export default function Navbar() {
             </div>
           ) : (
             <div className="hidden sm:flex items-center gap-2">
-              <button onClick={() => openAuthModal('login')} className="btn-ghost text-sm">
+              <button onClick={() => openAuthModal()} className="btn-ghost text-sm">
                 Sign In
               </button>
-              <button onClick={() => openAuthModal('signup')} className="btn-primary text-sm">
-                Get Started
+              <button onClick={() => openAuthModal()} className="btn-primary text-sm flex items-center gap-1.5">
+                <Wallet size={14} /> Connect Wallet
               </button>
             </div>
           )}
@@ -212,7 +187,7 @@ export default function Navbar() {
             ))}
             {isLoggedIn ? (
               <>
-                <div className="px-3 py-2 text-xs text-am-muted">{user.name} · {user.role}</div>
+                <div className="px-3 py-2 text-xs text-am-muted font-mono">{short} · {roleBadge.label}</div>
                 <button onClick={handleLogout}
                   className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-am-rose/80 hover:text-am-rose hover:bg-rose-50">
                   <LogOut size={15} /> Sign out
@@ -220,13 +195,13 @@ export default function Navbar() {
               </>
             ) : (
               <>
-                <button onClick={() => { openAuthModal('login'); setOpen(false) }}
+                <button onClick={() => { openAuthModal(); setOpen(false) }}
                   className="w-full text-left px-3 py-2.5 rounded-xl text-sm text-am-text-2 hover:bg-am-surface">
                   Sign In
                 </button>
-                <button onClick={() => { openAuthModal('signup'); setOpen(false) }}
-                  className="w-full btn-primary text-center mt-1">
-                  Get Started
+                <button onClick={() => { openAuthModal(); setOpen(false) }}
+                  className="w-full btn-primary text-center mt-1 flex items-center justify-center gap-1.5">
+                  <Wallet size={14} /> Connect Wallet
                 </button>
               </>
             )}

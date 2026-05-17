@@ -31,6 +31,18 @@ def create_access_grant(
     return grant_id
 
 
+def has_any_access_grant(buyer_wallet: str) -> bool:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM access_grants WHERE LOWER(buyer_wallet) = LOWER(?) LIMIT 1",
+            (buyer_wallet,),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 def get_access_grant(agent_id: str, buyer_wallet: str) -> dict[str, Any] | None:
     conn = get_connection()
     try:
@@ -79,7 +91,7 @@ def upsert_validation_session(
                    status            = excluded.status,
                    consensus_verdict = excluded.consensus_verdict,
                    aggregated_score  = excluded.aggregated_score,
-                   started_at        = COALESCE(validation_sessions.started_at, excluded.started_at),
+                   started_at        = CASE WHEN excluded.started_at IS NOT NULL THEN excluded.started_at ELSE validation_sessions.started_at END,
                    finished_at       = excluded.finished_at""",
             (agent_id, val_task_id, status, consensus_verdict,
              aggregated_score, started_at, finished_at),

@@ -2,8 +2,8 @@
   "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   "agent_id": "judge-gamma",
   "name": "Judge Gamma",
-  "description": "Independent AI judge specialised in execution behaviour analysis. Evaluates tool call logic, trajectory coherence, and consistency between process and output. Uses temperature 0.3 for a genuinely independent third opinion.",
-  "version": "1.0.0",
+  "description": "Independent AI judge (v2 protocol) specialised in execution behaviour analysis. Evaluates tool call logic and trajectory coherence. Implements challenge_token + trajectory_check protocol. Scores task_completion + output_quality (0-25 each); platform adds structural scores.",
+  "version": "2.0.0",
   "agent_type": "judge",
   "docker_image": "agentmarket/judge-gamma:v1",
   "image_url": null,
@@ -13,7 +13,7 @@
   "services": [
     {
       "name": "run",
-      "endpoint": "/api/v1/agents/judge-gamma/run",
+      "endpoint": "/run",
       "version": "1.0.0",
       "skills": ["evaluation", "trace-analysis", "behaviour-auditing"]
     }
@@ -28,21 +28,28 @@
     "behaviour-analysis",
     "trajectory-coherence",
     "process-verification",
-    "commit-reveal-voting"
+    "commit-reveal-voting",
+    "challenge-token-verification",
+    "trajectory-fingerprint"
   ],
   "env_var_keys": [
     "GROQ_API_KEY"
   ],
+  "tools_used": ["groq/llama-3.3-70b"],
+  "evaluation_style": "trace-analysis",
   "pricing": {
     "price_per_task": 0.0,
     "currency": "ETH",
     "note": "Judge agents earn validation fees from the protocol, not from buyers"
   },
-  "stake_amount": 0.1,
+  "stake_amount": 0.001,
   "cpu_limit": 1,
   "ram_limit_mb": 512,
   "timeout_sec": 60,
-  "readme": "# Judge Gamma — Behavioural Trace Analysis Judge\n\n## Overview\nJudge Gamma is a validation agent that evaluates AI agent execution traces with a focus on execution behaviour analysis. It examines whether the agent followed a rational, complete, and trustworthy process — not just whether the output looks correct.\n\n## Evaluation Criteria\n1. Is the execution trajectory logical for this type of task?\n2. Do tool calls support the final output, or does it appear fabricated?\n3. Are there errors, loops, or missing steps that undermine reliability?\n4. Does the volume of work (tokens, calls, time) match the task complexity?\n\n## Input Format (prompt field, JSON-serialized)\n```json\n{\n  \"task_prompt\": \"What are AI trends in 2025?\",\n  \"agent_output\": \"{...}\",\n  \"trajectory\": [\n    {\"seq\": 0, \"tool\": \"groq\", \"tool_category\": \"llm\", \"status\": 200, \"latency_ms\": 1200, \"tokens_total\": 800, \"request_query\": \"...\", \"response_content\": \"...\"}\n  ],\n  \"tools_used\": 5,\n  \"llm_calls\": 3,\n  \"search_calls\": 2,\n  \"errors_count\": 0,\n  \"duration_sec\": 12.5,\n  \"total_tokens\": 3200\n}\n```\n\n## Output Format\n```json\n{\n  \"judge_id\": \"judge-gamma\",\n  \"score\": 72,\n  \"verdict\": \"VALID\",\n  \"justification\": \"The agent executed 3 LLM calls and 2 search queries consistent with the research task. Tool usage is proportional to complexity.\"\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b, temperature 0.3)\n",
+  "readme": "# Judge Gamma — Behavioural Trace Analysis Judge (v2)\n\n## Overview\nJudge Gamma evaluates execution behaviour: tool call logic, trajectory coherence, and process-output consistency. Uses temperature 0.3 for genuine independence. Implements v2 protocol.\n\n## Evaluation Criteria (semantic, 0-25 each)\n- `task_completion`: Did the trajectory lead to a correct answer?\n- `output_quality`: Does the process support the output, or is it fabricated?\n\n## Output Format (v2)\n```json\n{\n  \"judge_id\": \"judge-gamma\",\n  \"criteria\": { \"task_completion\": 19, \"output_quality\": 21 },\n  \"trajectory_check\": { \"steps_count\": 5, \"first_tool\": \"groq\", \"last_seq\": 4, \"has_errors\": false },\n  \"challenge_token\": \"<verbatim from trace>\",\n  \"justification\": \"2-3 sentences referencing specific trace observations\"\n}\n```\n\nFinal score = judge semantic (0-50) + platform structural (0-50). VALID threshold: 70.\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b, temperature 0.3)\n",
+  "evaluation_skills": ["trajectory-analysis", "tool-coherence", "process-verification", "behaviour-audit"],
+  "validated_task_types": ["research", "analysis", "write", "generate", "report"],
+  "evaluation_domains": ["finance", "technology", "market-research", "science", "business"],
   "badges": ["Judge", "Verified"],
   "categories": ["validation", "quality-assurance"],
   "active": true

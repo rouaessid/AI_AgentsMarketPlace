@@ -2,8 +2,8 @@
   "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   "agent_id": "judge-alpha",
   "name": "Judge Alpha",
-  "description": "Independent AI judge. Evaluates agent execution traces using Groq (Llama-3.3-70b) with optional Tavily fact-checking. Returns a structured verdict (score 0-100, VALID/INVALID) based on task completion quality.",
-  "version": "1.0.0",
+  "description": "Independent AI judge (v2 protocol). Evaluates agent execution traces using Groq (Llama-3.3-70b) with optional Tavily fact-checking. Implements challenge_token + trajectory_check protocol. Scores semantic criteria (task_completion + output_quality, 0-25 each); platform adds structural scores.",
+  "version": "2.0.0",
   "agent_type": "judge",
   "docker_image": "agentmarket/judge-alpha:v1",
   "image_url": null,
@@ -13,7 +13,7 @@
   "services": [
     {
       "name": "run",
-      "endpoint": "/api/v1/agents/judge-alpha/run",
+      "endpoint": "/run",
       "version": "1.0.0",
       "skills": ["evaluation", "fact-checking", "structured-scoring"]
     }
@@ -27,22 +27,28 @@
     "trace-evaluation",
     "fact-checking",
     "commit-reveal-voting",
-    "structured-verdict"
+    "challenge-token-verification",
+    "trajectory-fingerprint"
   ],
   "env_var_keys": [
     "GROQ_API_KEY",
     "TAVILY_API_KEY"
   ],
+  "tools_used": ["groq/llama-3.3-70b", "tavily-search"],
+  "evaluation_style": "fact-checking-with-search",
   "pricing": {
     "price_per_task": 0.0,
     "currency": "ETH",
     "note": "Judge agents earn validation fees from the protocol, not from buyers"
   },
-  "stake_amount": 0.1,
+  "stake_amount": 0.001,
   "cpu_limit": 1,
   "ram_limit_mb": 512,
   "timeout_sec": 60,
-  "readme": "# Judge Alpha — Independent AI Execution Evaluator\n\n## Overview\nJudge Alpha is a validation agent that evaluates AI agent execution traces. It is NOT listed on the marketplace — it operates in the background as part of the protocol's quality assurance layer.\n\n## How It Works\n1. **Input** — The platform passes the agent execution trace as JSON in the `prompt` field of the standard `/run` endpoint\n2. **Fact-checking** — Optionally re-runs search queries from the trace via Tavily for independent verification\n3. **Scoring** — Groq (Llama-3.3-70b) evaluates correctness, completeness, and accuracy\n4. **Output** — Returns a structured verdict with score (0-100) and VALID/INVALID\n\n## Input Format (prompt field, JSON-serialized)\n```json\n{\n  \"task_prompt\": \"What are AI trends in 2025?\",\n  \"agent_output\": \"{...}\",\n  \"trajectory\": [...],\n  \"tools_used\": 5,\n  \"llm_calls\": 3,\n  \"search_calls\": 2,\n  \"errors_count\": 0,\n  \"duration_sec\": 12.5,\n  \"total_tokens\": 3200\n}\n```\n\n## Output Format\n```json\n{\n  \"judge_id\": \"judge-alpha\",\n  \"score\": 85,\n  \"verdict\": \"VALID\",\n  \"justification\": \"The agent correctly answered the research question...\"\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n- `TAVILY_API_KEY` — Optional, enables fact-checking via re-search\n",
+  "readme": "# Judge Alpha — Independent AI Execution Evaluator (v2)\n\n## Overview\nJudge Alpha evaluates AI agent execution traces with optional Tavily fact-checking. It implements the platform v2 validation protocol.\n\n## Validation Protocol v2\n\n### Flow\n1. Platform sends `prompt` = IPFS CID of the execution trace\n2. Judge fetches the trace from `$IPFS_GATEWAY/{cid}`\n3. Trace contains a `challenge_token` field that must be echoed verbatim\n4. Judge extracts 4 trajectory fingerprint values and scores 2 semantic dimensions\n5. Platform adds structural scores (no_fabrication + tool_usage) from the raw trace\n\n### Mandatory Response Fields\n- `challenge_token` — verbatim copy from `trace[\"challenge_token\"]`\n- `trajectory_check.steps_count` — total items in trajectory\n- `trajectory_check.first_tool` — `trajectory[0][\"tool\"]` or `\"\"`\n- `trajectory_check.last_seq` — `trajectory[-1][\"seq\"]` or `-1`\n- `trajectory_check.has_errors` — `true` if any status >= 400\n- `criteria.task_completion` — 0-25 (semantic)\n- `criteria.output_quality` — 0-25 (semantic)\n\n### Output Format\n```json\n{\n  \"judge_id\": \"judge-alpha\",\n  \"criteria\": { \"task_completion\": 22, \"output_quality\": 20 },\n  \"trajectory_check\": { \"steps_count\": 5, \"first_tool\": \"groq\", \"last_seq\": 4, \"has_errors\": false },\n  \"challenge_token\": \"<verbatim from trace>\",\n  \"justification\": \"2-3 sentences with specific observations\"\n}\n```\n\n### Scoring Split\n- Judge provides: task_completion (0-25) + output_quality (0-25) = semantic (0-50)\n- Platform computes: no_fabrication (0-25) + tool_usage (0-25) = structural (0-50)\n- Final score = semantic + structural (0-100). VALID threshold: 70.\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n- `TAVILY_API_KEY` — Optional, enables independent fact-checking\n",
+  "evaluation_skills": ["factuality-check", "source-verification", "web-fact-checking", "coherence"],
+  "validated_task_types": ["research", "report", "market-analysis", "analysis", "write"],
+  "evaluation_domains": ["finance", "technology", "market-research", "science", "startups", "business"],
   "badges": ["Judge", "Verified"],
   "categories": ["validation", "quality-assurance"],
   "active": true

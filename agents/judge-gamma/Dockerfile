@@ -1,22 +1,21 @@
-# ─────────────────────────────────────────────────────────────────────────────
-#  Judge Gamma — Seller-provided judge image
+﻿# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+#  Judge Gamma â€” Seller-provided judge image
 #  Image tag: agentmarket/judge-gamma:v1
 #
-#  Role: Behavioural trace analysis judge — no external search tools.
+#  Role: Behavioural trace analysis judge â€” no external search tools.
 #  Evaluates execution process: tool call logic, trajectory coherence,
 #  consistency between process and output, suspicious patterns.
 #  Uses temperature 0.3 for a genuinely independent third opinion.
 #
 #  The judge provider provides ONLY:
 #    - This Dockerfile
-#    - agent.py (evaluation logic)
-#    - server.py (HTTP server — same /run contract as any agent)
+#    - agent.py (evaluation logic + embedded HTTP server)
 #    - requirements.txt
-#    - manifest.json (agent_type=judge — registered via frontend form)
+#    - manifest.json (agent_type=judge â€” registered via frontend form)
 #
 #  Build:
 #    docker build -t agentmarket/judge-gamma:v1 .
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 FROM agentmarket/base:v1
 
@@ -25,13 +24,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --default-timeout=300 --retries 10 -r requirements.txt
 
-COPY agent.py  .
-COPY server.py .
-COPY .env      .
+COPY agent.py .
 
 ENV AGENT_ID=judge-gamma
 ENV AGENT_NAME="Judge Gamma"
-ENV LLM_MODEL=llama-3.3-70b-versatile
+ENV LLM_MODEL=deepseek/deepseek-v4-flash:free
+ENV LLM_BASE_URL=https://openrouter.ai/api/v1
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 
@@ -40,4 +38,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 
 EXPOSE ${PORT}
 
-CMD ["sh", "-c", "set -a && . ./.env && set +a && uvicorn server:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "uvicorn agent:app --host 0.0.0.0 --port ${PORT}"]

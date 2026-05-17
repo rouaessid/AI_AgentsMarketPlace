@@ -29,6 +29,7 @@ from web3.middleware import ExtraDataToPOAMiddleware
 
 from app.core.config import get_settings
 from app.db.agent_repo import get_last_block, set_last_block
+from app.db.collaboration_repo import insert_collaboration_score
 from app.db.escrow_repo import insert_escrow_event
 from app.db.identity_repo import upsert_agent_identity, upsert_agent_version
 from app.db.reputation_repo import insert_reputation_event, mark_revoked
@@ -214,6 +215,17 @@ _VALIDATION_ABI = [
         "name": "TaskExpired",
         "type": "event",
     },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": False, "name": "agentId", "type": "string"},
+            {"indexed": False, "name": "taskId",  "type": "string"},
+            {"indexed": False, "name": "score",   "type": "uint8"},
+            {"indexed": False, "name": "mode",    "type": "uint8"},
+        ],
+        "name": "ScoreRecorded",
+        "type": "event",
+    },
 ]
 
 _REPUTATION_ABI = [
@@ -303,6 +315,19 @@ class BlockchainIndexer:
     async def _process_new_blocks(self) -> None:
         self._eigentrust_pending = False
         current_block = self.w3.eth.block_number
+
+        # Detect chain reset: if chain is behind what DB remembers, Anvil was restarted without --state
+        _CONTRACT_NAMES = (
+            "identity_registry", "escrow_manager", "staking_contract",
+            "validation_registry", "reputation_registry",
+        )
+        max_known_block = max(get_last_block(n) for n in _CONTRACT_NAMES)
+        if current_block < max_known_block:
+            logger.warning(
+                "Chain reset detected: current_block=%d < last_known=%d — wiping DB and re-indexing",
+                current_block, max_known_block,
+            )
+            self._reset_db()
 
         contracts = [
             ("identity_registry",   settings.identity_registry_address,    _IDENTITY_ABI,    self._handle_identity),
@@ -602,6 +627,59 @@ class BlockchainIndexer:
                 block_number=block,
             )
 
+        elif event_name == "ScoreRecorded":
+            agent_id = args["agentId"]
+            score    = float(args["score"])
+            mode     = int(args["mode"])
+            logger.info(
+                "Indexer → ScoreRecorded: agentId=%s score=%.0f mode=%d",
+                agent_id, score, mode,
+            )
+            insert_collaboration_score(
+                event_id=event_id,
+                agent_id=agent_id,
+                task_id=args["taskId"],
+                score=score,
+                mode=mode,
+                tx_hash=tx,
+                block_number=block,
+            )
+            self._eigentrust_pending = True
+
+    # ── Chain reset ───────────────────────────────────────────────────────────
+
+    def _reset_db(self) -> None:
+        """
+        Wipe all on-chain-derived tables and reset last_block counters to 0.
+        Called when a chain reset is detected (Anvil restarted without --state).
+        Telemetry (agent_service usage stats) is intentionally preserved.
+        """
+        from app.db.database import (
+            Agent, AgentVersion, CollaborationLog, ReputationEvent,
+            get_session,
+        )
+        from app.db.agent_repo import set_last_block
+
+        with get_session() as s:
+            s.query(CollaborationLog).delete()
+            s.query(ReputationEvent).delete()
+            s.query(AgentVersion).delete()
+            s.query(Agent).delete()
+            s.commit()
+
+        for name in (
+            "identity_registry", "escrow_manager",
+            "staking_contract", "validation_registry", "reputation_registry",
+        ):
+            set_last_block(name, 0)
+
+        # Clear in-memory agent cache so stale records are gone
+        from app.services import agent_service as svc
+        svc._records.clear()
+        svc._agent_index.clear()
+
+        logger.warning("DB reset complete — all on-chain tables cleared, re-indexing from block 0")
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _sync_agent_service_cache(self, agent_id: str) -> None:
@@ -719,6 +797,32 @@ class BlockchainIndexer:
 
     # ── ReputationRegistry ────────────────────────────────────────────────────
 
+    def _update_reputation_from_eigentrust(self, agent_token_id: int, score_100: float) -> None:
+        """
+        Called when NewFeedback(tag1='eigenTrust') is indexed.
+        Writes the EigenTrust final_score (converted to 0-100) into agent_telemetry
+        so the UX always displays the canonical EigenTrust reputation.
+        """
+        try:
+            from app.db.database import Agent, get_session
+            from app.db.telemetry_repo import upsert_telemetry
+            from app.services import agent_service as svc
+
+            with get_session() as s:
+                row = s.query(Agent).filter(Agent.current_token_id == agent_token_id).first()
+                if not row:
+                    return
+                agent_id = row.agent_id
+
+            upsert_telemetry(agent_id, reputation_score=score_100)
+            svc._refresh_record_telemetry(agent_id, {"reputation_score": score_100})
+            logger.info(
+                "Reputation updated from EigenTrust: agent=%s tokenId=%d score=%.1f/100",
+                agent_id, agent_token_id, score_100,
+            )
+        except Exception as e:
+            logger.warning("_update_reputation_from_eigentrust failed: %s", e)
+
     def _handle_reputation(self, event_name: str, log: Any) -> None:
         args     = log["args"]
         block    = log["blockNumber"]
@@ -758,10 +862,19 @@ class BlockchainIndexer:
                 tx_hash=tx,
                 block_number=block,
             )
-            # Nouveau signal (starred, successRate, collaboration) → recalculer EigenTrust
-            # On ignore les NewFeedback tag1="eigenTrust" (c'est nous qui les écrivons)
-            if tag1 != "eigenTrust":
+            # Seul "successRate" (signal juge technique) déclenche un recalcul EigenTrust.
+            # "starred" (note utilisateur) est uniquement le facteur f[i] — pas un déclencheur.
+            # "eigenTrust" est écrit par nous — pas de boucle infinie.
+            if tag1 == "successRate":
                 self._eigentrust_pending = True
+            elif tag1 == "eigenTrust":
+                # EigenTrust score finalisé → mettre à jour agent_telemetry.reputation_score
+                # value=finalScore×1000, valueDecimals=3  →  finalScore ∈ [0,1]  →  ×100 pour UI
+                dec = value_decimals or 0
+                et_final = value / (10 ** dec) if dec else float(value)
+                et_score_100 = round(et_final * 100, 1)
+                self._update_reputation_from_eigentrust(agent_token_id, et_score_100)
+            # "starred" et autres tags → ignorés ici (f[i] calculé dans eigentrust_service)
 
         elif event_name == "FeedbackRevoked":
             agent_token_id = int(args["agentId"])

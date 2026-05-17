@@ -7,6 +7,7 @@ web3
 
 # IA
 google-genai
+groq
 
 # Recherche
 requests
@@ -26,3 +27,5 @@ pydantic-settings
 aiofiles
 httpx
 pyngrok
+
+FlagEmbedding

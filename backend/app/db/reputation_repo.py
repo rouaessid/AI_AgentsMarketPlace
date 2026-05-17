@@ -100,6 +100,26 @@ def get_reputation_signals(agent_token_id: int) -> list[dict[str, Any]]:
         ]
 
 
+def get_latest_eigentrust_score(agent_token_id: int) -> float | None:
+    """
+    Return the most recent EigenTrust final_score (0-100) written on-chain
+    for this agent, or None if no eigenTrust feedback exists yet.
+    """
+    with get_session() as s:
+        row = (
+            s.query(ReputationEvent)
+            .filter_by(agent_token_id=agent_token_id, is_revoked=0)
+            .filter(ReputationEvent.tag1 == "eigenTrust")
+            .order_by(ReputationEvent.block_number.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        dec = row.value_decimals or 0
+        raw = row.value / (10 ** dec) if dec else float(row.value)
+        return round(raw * 100, 1)
+
+
 def get_aggregated_score(agent_token_id: int) -> dict[str, Any]:
     """
     Compute a simple aggregated score per tag1 from raw on-chain signals.

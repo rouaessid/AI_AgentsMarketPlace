@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl -- bash -c \"which node && which npx && node --version 2>&1 | head -5\")",
+      "Bash(docker build *)"
+    ]
+  }
+}

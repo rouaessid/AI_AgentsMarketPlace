@@ -58,17 +58,18 @@ const ABI_ESCROW = [
 ];
 
 const ABI_VALIDATION = [
-  "function validationRequest(string taskId, string providerAgentId, string requestURI, bytes32 requestHash) external",
+  "function validationRequest(string taskId, string providerAgentId, string requestURI, bytes32 requestHash, uint8 mode) external",
   "function assignJudges(string taskId, string[] candidates) external",
   "function commitVote(string taskId, string judgeId, bytes32 commitHash) external",
   "function revealVote(string taskId, string judgeId, uint8 vote, bytes32 salt) external",
   "function finaliseValidation(string taskId, uint256 aggregatedScore, string justificationURI) external",
-  "function getTask(string taskId) external view returns (tuple(string taskId, string providerAgentId, address providerWallet, bytes32 requestHash, uint256 erc8004AgentId, uint8 status, uint256 createdAt, uint256 commitDeadline, uint256 revealDeadline, string[3] judgeIds, address[3] judgeWallets, uint8 finalResponse, string finalTag, uint256 score))",
+  "function getTask(string taskId) external view returns (tuple(string taskId, string providerAgentId, address providerWallet, bytes32 requestHash, uint256 erc8004AgentId, uint8 status, uint256 createdAt, uint256 commitDeadline, uint256 revealDeadline, string[3] judgeIds, address[3] judgeWallets, uint8 finalResponse, string finalTag, uint256 score, uint8 mode))",
   "function setEscrowManager(address a) external",
   "event JudgesAssigned(string indexed taskId, string judge0, string judge1, string judge2, uint256 commitDeadline, uint256 revealDeadline)",
   "event VoteCommitted(string indexed taskId, string indexed judgeId)",
   "event VoteRevealed(string indexed taskId, string indexed judgeId, uint8 vote)",
   "event ValidationResponse(address indexed validatorAddress, uint256 indexed agentId, bytes32 indexed requestHash, uint8 response, string responseURI, bytes32 responseHash, string tag)",
+  "event ScoreRecorded(string agentId, string taskId, uint8 score, uint8 mode)",
 ];
 
 // ── Constantes ───────────────────────────────────────────────────────────────
@@ -125,7 +126,7 @@ async function main() {
       0,                                       // AgentType.PROVIDER
       "ipfs://QmProviderManifest",
       "1.0.0",
-      ethers.parseEther("0.05"),               // pricePerTask = 0.05 ETH
+      ethers.parseEther("0.0001"),              // pricePerTask = 0.0001 ETH (testnet)
       ethers.ZeroAddress                       // ownerAddress = msg.sender
     );
     await tx.wait();
@@ -164,21 +165,21 @@ async function main() {
   // ── Step 2 : Staking ─────────────────────────────────────────────────────
   sep("STEP 2 — Staking");
 
-  // Provider → 0.2 ETH (min 0.1)
+  // Provider → 0.002 ETH (min 0.001)
   try {
-    const tx = await staking.connect(provider).stake({ value: ETH("0.2") });
+    const tx = await staking.connect(provider).stake({ value: ETH("0.002") });
     await tx.wait();
-    ok(`Provider staké 0.2 ETH`);
+    ok(`Provider staké 0.002 ETH`);
   } catch (e) {
     warn(`Provider stake: ${e.message.slice(0, 80)}`);
   }
 
-  // Juges → 0.1 ETH chacun (min 0.05)
+  // Juges → 0.001 ETH chacun (min 0.0005)
   for (let i = 0; i < 3; i++) {
     try {
-      const tx = await staking.connect(judgeWallets[i]).stake({ value: ETH("0.1") });
+      const tx = await staking.connect(judgeWallets[i]).stake({ value: ETH("0.001") });
       await tx.wait();
-      ok(`Judge ${i + 1} staké 0.1 ETH`);
+      ok(`Judge ${i + 1} staké 0.001 ETH`);
     } catch (e) {
       warn(`Judge ${i + 1} stake: ${e.message.slice(0, 80)}`);
     }
@@ -195,7 +196,7 @@ async function main() {
   // ── Step 3 : Dépôt Escrow (Buyer) ────────────────────────────────────────
   sep("STEP 3 — Escrow (Buyer dépose le paiement)");
 
-  const TASK_PRICE = ETH("0.05");   // must match pricePerTask set in IdentityRegistry
+  const TASK_PRICE = ETH("0.0001"); // must match pricePerTask set in IdentityRegistry
   try {
     const tx = await escrow.connect(buyer).depositPayment(TASK_ID, PROVIDER_ID, { value: TASK_PRICE });
     await tx.wait();
@@ -219,7 +220,8 @@ async function main() {
       TASK_ID,
       PROVIDER_ID,
       RESULT_URI,
-      RESULT_HASH
+      RESULT_HASH,
+      0   // mode 0 = solo task
     );
     const receipt = await tx.wait();
     ok(`validationRequest() émis — task '${TASK_ID}' en PENDING`);
@@ -325,7 +327,7 @@ async function main() {
     ok(`finaliseValidation() — consensus atteint`);
     info(`Gas utilisé : ${receipt.gasUsed.toString()}`);
 
-    // Lire l'event ValidationResponse (ERC-8004)
+    // Lire les events ValidationResponse + ScoreRecorded
     const iface = new ethers.Interface(ABI_VALIDATION);
     for (const log of receipt.logs) {
       try {
@@ -335,6 +337,13 @@ async function main() {
           console.log(`       response : ${parsed.args.response} / 100`);
           console.log(`       tag      : ${parsed.args.tag}`);
           console.log(`       agentId  : ${parsed.args.agentId}`);
+        }
+        if (parsed.name === "ScoreRecorded") {
+          console.log(`\n  📊  ScoreRecorded (→ EigenTrust)`);
+          console.log(`       agentId : ${parsed.args.agentId}`);
+          console.log(`       taskId  : ${parsed.args.taskId}`);
+          console.log(`       score   : ${parsed.args.score}`);
+          console.log(`       mode    : ${parsed.args.mode === 0 ? "solo" : "pipeline"}`);
         }
       } catch {}
     }

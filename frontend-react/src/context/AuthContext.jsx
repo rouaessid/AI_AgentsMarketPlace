@@ -1,99 +1,111 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 
 const AuthContext = createContext(null)
+const STORAGE_KEY = 'agentmarket_auth'
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
+  const [auth, setAuth] = useState(() => {
     try {
-      const saved = localStorage.getItem('agentmarket_user')
+      const saved = localStorage.getItem(STORAGE_KEY)
       return saved ? JSON.parse(saved) : null
     } catch { return null }
   })
+  const [authModal, setAuthModal]   = useState({ open: false })
+  const [connecting, setConnecting] = useState(false)
 
-  const [walletAddress, setWalletAddress] = useState(null)
-  const [authModal, setAuthModal] = useState({ open: false, defaultTab: 'login' })
-
-  // Persist user to localStorage
   useEffect(() => {
-    if (user) localStorage.setItem('agentmarket_user', JSON.stringify(user))
-    else localStorage.removeItem('agentmarket_user')
-  }, [user])
+    if (auth) localStorage.setItem(STORAGE_KEY, JSON.stringify(auth))
+    else localStorage.removeItem(STORAGE_KEY)
+  }, [auth])
 
-  // Auto-reconnect wallet if previously connected
+  // Logout when MetaMask account switches or disconnects
   useEffect(() => {
-    async function tryReconnect() {
-      if (window.ethereum === undefined) return
-      try {
-        const accounts = await window.ethereum.request({ method: 'eth_accounts' })
-        if (accounts.length > 0) setWalletAddress(accounts[0])
-      } catch {}
+    if (!window.ethereum) return
+    function handleAccountsChanged(accounts) {
+      if (accounts.length === 0) {
+        logout()
+      } else if (auth && accounts[0].toLowerCase() !== auth.wallet) {
+        logout()
+      }
     }
-    tryReconnect()
-  }, [])
-
-  function login(userData) {
-    setUser(userData)
-  }
-
-  function logout() {
-    setUser(null)
-    setWalletAddress(null)
-    localStorage.removeItem('agentmarket_user')
-  }
-
-  function switchRole(role) {
-    if (!user) return
-    const updated = { ...user, role }
-    setUser(updated)
-  }
+    window.ethereum.on('accountsChanged', handleAccountsChanged)
+    return () => window.ethereum.removeListener('accountsChanged', handleAccountsChanged)
+  }, [auth])
 
   async function connectWallet() {
-    if (window.ethereum === undefined) {
+    if (!window.ethereum) {
       alert('MetaMask not detected. Please install MetaMask.')
       return null
     }
+    setConnecting(true)
     try {
+      // 1. Request account
       const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
-      if (accounts.length > 0) {
-        setWalletAddress(accounts[0])
-        // If user logged in, attach wallet to their account
-        if (user) setUser(u => ({ ...u, wallet: accounts[0] }))
-        return accounts[0]
-      }
+      if (!accounts.length) return null
+      const wallet = accounts[0].toLowerCase()
+
+      // 2. Get nonce + message from backend
+      const nonceRes = await fetch(`/api/v1/auth/nonce?wallet=${encodeURIComponent(wallet)}`)
+      if (!nonceRes.ok) throw new Error('Failed to get nonce')
+      const { message } = await nonceRes.json()
+
+      // 3. Sign message with MetaMask (personal_sign)
+      const signature = await window.ethereum.request({
+        method: 'personal_sign',
+        params: [message, wallet],
+      })
+
+      // 4. Verify signature → JWT + roles
+      const verifyRes = await fetch('/api/v1/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet, signature }),
+      })
+      if (!verifyRes.ok) throw new Error('Signature verification failed')
+      const { token, roles } = await verifyRes.json()
+
+      const newAuth = { wallet, token, isProvider: roles.isProvider, isBuyer: roles.isBuyer }
+      setAuth(newAuth)
+      return newAuth
     } catch (e) {
-      if (e.code !== 4001) alert(`Wallet error: ${e.message}`)
+      if (e.code !== 4001) console.error('SIWE error:', e)
+      throw e
+    } finally {
+      setConnecting(false)
     }
-    return null
   }
 
-  function disconnectWallet() {
-    setWalletAddress(null)
-    if (user) setUser(u => { const { wallet, ...rest } = u; return rest })
+  function logout() {
+    setAuth(null)
+    localStorage.removeItem(STORAGE_KEY)
   }
 
-  function openAuthModal(tab = 'login') {
-    setAuthModal({ open: true, defaultTab: tab })
-  }
+  function openAuthModal() { setAuthModal({ open: true }) }
+  function closeAuthModal() { setAuthModal({ open: false }) }
 
-  function closeAuthModal() {
-    setAuthModal({ open: false, defaultTab: 'login' })
-  }
+  const walletAddress = auth?.wallet ?? null
+  const user = auth
+    ? {
+        wallet: auth.wallet,
+        name: `${auth.wallet.slice(0, 6)}…${auth.wallet.slice(-4)}`,
+        email: null,
+      }
+    : null
 
   return (
     <AuthContext.Provider value={{
       user,
       walletAddress,
-      isLoggedIn:  !!user,
-      isProvider:  user?.role === 'provider',
-      isBuyer:     user?.role === 'buyer',
-      login,
-      logout,
-      switchRole,
+      token:       auth?.token ?? null,
+      isLoggedIn:  !!auth,
+      isProvider:  auth?.isProvider ?? false,
+      isBuyer:     auth?.isBuyer    ?? false,
+      connecting,
       connectWallet,
-      disconnectWallet,
-      authModal,
+      logout,
       openAuthModal,
       closeAuthModal,
+      authModal,
     }}>
       {children}
     </AuthContext.Provider>

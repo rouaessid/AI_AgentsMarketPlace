@@ -43,6 +43,11 @@ def _build_reg_file(req: AgentSubmitRequest) -> AgentRegistrationFile:
         image=req.image_url, readme=req.readme, services=req.services,
         x402Support=req.x402_support, active=True,
         supportedTrust=req.supported_trust, agent_type=req.agent_type.value,
+        evaluation_skills=req.evaluation_skills,
+        validated_task_types=req.validated_task_types,
+        evaluation_domains=req.evaluation_domains,
+        tools_used=req.tools_used,
+        evaluation_style=req.evaluation_style,
         capabilities={
             "llm_model": req.llm_model, "framework": req.framework,
             "language": req.language, "max_tokens": req.max_tokens,
@@ -125,6 +130,7 @@ async def restore_from_db() -> None:
     """
     from app.db.identity_repo import get_all_agent_identities
     from app.db.telemetry_repo import get_all_telemetry
+    from app.db.reputation_repo import get_latest_eigentrust_score
 
     agents    = get_all_agent_identities()
     telemetry = get_all_telemetry()  # {agent_id: dict}
@@ -168,7 +174,8 @@ async def restore_from_db() -> None:
             pricing = reg_file.pricing if reg_file else {}
 
             # Merge telemetry into capabilities (display layer only)
-            if reg_file and tel:
+            # reg_file check is separate from tel — tel={} (empty) is falsy but valid
+            if reg_file:
                 caps = dict(reg_file.capabilities)
                 caps.update({
                     "tasks_performed":      tel.get("tasks_performed", 0),
@@ -179,7 +186,7 @@ async def restore_from_db() -> None:
                     "monthly_tasks":        tel.get("monthly_tasks", [0]*12),
                     "weekly_success":       tel.get("weekly_success", [0]*7),
                     "success_rate":         tel.get("success_rate", 98.5),
-                    "reputation_score":     tel.get("reputation_score", 95.0),
+                    "reputation_score":     get_latest_eigentrust_score(a.get("current_token_id")) or tel.get("reputation_score", 0.0),
                     "last_active":          tel.get("last_active"),
                 })
                 reg_file = reg_file.model_copy(update={"capabilities": caps})
@@ -441,6 +448,21 @@ class AgentService:
         })
         _records[body.registration_id] = record
         self._persist_record(record)
+
+        # Calcul embedding BAAI/bge-m3 — non-bloquant, après activation
+        if record.registration_file:
+            try:
+                import asyncio as _asyncio
+                from app.services.matching_service import embed_agent_capabilities
+                meta = record.registration_file.model_dump()
+                loop = _asyncio.get_event_loop()
+                loop.run_in_executor(
+                    None,
+                    lambda: embed_agent_capabilities(record.agent_id, meta),
+                )
+            except Exception as _emb_err:
+                logger.warning("Embedding non calculé pour %s: %s", record.agent_id, _emb_err)
+
         return record
 
     async def new_version(self, req: AgentNewVersionRequest) -> AgentNewVersionResponse:
@@ -638,13 +660,22 @@ class AgentService:
         logger.debug("Telemetry updated for %s: tasks=%d avg=%.2fs rate=%.1f%%",
                      agent_id, n, new_avg, new_rate)
 
-    def update_validation_metrics(self, agent_id: str, *, verdict: str, score: float) -> None:
+    def update_validation_metrics(self, agent_id: str, *, verdict: str, score: float, mode: int = 0) -> None:
         """
         Update reputation after a validation completes.
-        Writes to agent_telemetry (telemetry zone) only.
-        Will be replaced by ReputationContract indexer events in the future.
+        Writes to agent_telemetry AND collaboration_log.
+        mode=0 (solo), mode=1 (pipeline) — used to feed the EigenTrust C matrix.
         """
+        import uuid
         from app.db.telemetry_repo import get_telemetry, upsert_telemetry
+        from app.db.collaboration_repo import insert_collaboration_score
+        insert_collaboration_score(
+            event_id=f"val-{agent_id}-{uuid.uuid4().hex[:12]}",
+            agent_id=agent_id,
+            task_id=f"task-{uuid.uuid4().hex[:8]}",
+            score=float(score),
+            mode=mode,
+        )
 
         tel       = get_telemetry(agent_id) or {}
         val_count = int(tel.get("val_count") or 0) + 1

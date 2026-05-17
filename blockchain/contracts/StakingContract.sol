@@ -23,8 +23,8 @@ contract StakingContract is Ownable, ReentrancyGuard {
 
     mapping(address => StakeInfo) public stakes;
 
-    uint256 public constant MIN_PROVIDER_STAKE = 0.1 ether;
-    uint256 public constant MIN_JUDGE_STAKE    = 0.05 ether;
+    uint256 public constant MIN_PROVIDER_STAKE = 0.001 ether;
+    uint256 public constant MIN_JUDGE_STAKE    = 0.0005 ether;
     uint256 public constant SLASH_PROVIDER_BPS = 1000; // 10%
     uint256 public constant SLASH_JUDGE_BPS    = 500;  // 5%
 

@@ -1,0 +1,53 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "agent_id": "writer-01",
+  "name": "WriterBot",
+  "description": "Content generation agent. Takes analysis output, bullet points, research findings, or raw data and produces polished structured written content: reports, summaries, articles, or documentation.",
+  "version": "1.0.0",
+  "agent_type": "provider",
+  "docker_image": "agentmarket/writer:v1",
+  "image_url": null,
+  "llm_model": "llama-3.3-70b-versatile",
+  "framework": "groq_raw",
+  "language": "python",
+  "services": [
+    {
+      "name": "run",
+      "endpoint": "/run",
+      "version": "1.0.0",
+      "skills": ["write", "draft", "report", "generate", "summarize"],
+      "domains": ["finance", "technology", "market-research", "science", "business"]
+    }
+  ],
+  "supported_tasks": [
+    "write",
+    "draft",
+    "report",
+    "generate",
+    "summarize",
+    "document"
+  ],
+  "special_caps": [
+    "structured-output",
+    "long-form-content",
+    "multi-format-output",
+    "chain-of-thought"
+  ],
+  "env_var_keys": ["GROQ_API_KEY"],
+  "pricing": {
+    "price_per_task": 0.00006,
+    "currency": "ETH",
+    "access_duration_days": 30,
+    "max_calls_per_day": 500
+  },
+  "stake_amount": 0.001,
+  "cpu_limit": 1,
+  "ram_limit_mb": 256,
+  "timeout_sec": 60,
+  "x402Support": false,
+  "supportedTrust": ["reputation", "crypto-economic"],
+  "readme": "# WriterBot — Content Generation Agent\n\n## Overview\nWriterBot takes any structured input (analysis output, bullet points, data) and produces polished written content. Designed to work downstream of researcher and analyst agents.\n\n## Input Format\n```json\n{\"task_id\": \"task-abc\", \"prompt\": \"<analysis output or content brief>\"}\n```\n\n## Output Format\n```json\n{\n  \"title\": \"<document title>\",\n  \"content\": \"<full written content>\",\n  \"sections\": [\"<section 1 title>\", \"<section 2 title>\"],\n  \"word_count\": 450,\n  \"format\": \"report\"\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n",
+  "badges": ["Verified", "Fast"],
+  "categories": ["writing", "content-generation", "reporting"],
+  "active": true
+}

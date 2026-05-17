@@ -11,10 +11,12 @@ Architecture OpenRank :
   Score_Final = t × starred   (User → Agent, pondérateur contextuel)
 """
 from __future__ import annotations
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from app.db.identity_repo import get_agent_identity, get_all_agent_identities
 from app.db.reputation_repo import get_aggregated_score, get_reputation_signals
@@ -22,6 +24,91 @@ from app.db.reputation_repo import get_aggregated_score, get_reputation_signals
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reputation", tags=["reputation"])
 
+_bg_tasks: set = set()
+_NOT_ON_CHAIN = "Agent non encore enregistré on-chain"
+
+def _fire(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+# ── Request bodies ────────────────────────────────────────────────────────────
+
+class FeedbackBody(BaseModel):
+    score:   int        # 1-5 stars
+    comment: str = ""
+
+class SimulateValidationBody(BaseModel):
+    agent_id: str
+    score:    int = 80  # validation score 0-100
+
+
+# ── Debug: simulate a judge validation ───────────────────────────────────────
+# Defined BEFORE /{agent_id} to avoid path-param conflict
+
+@router.post("/debug/simulate-validation")
+async def simulate_validation(body: SimulateValidationBody):
+    """
+    Debug endpoint — writes a successRate feedback on-chain using the feedback wallet.
+    Simulates what ValidationRegistry.recordReputation() would do after a real judge run.
+    """
+    identity = get_agent_identity(body.agent_id)
+    if not identity:
+        raise HTTPException(404, detail=f"Agent {body.agent_id!r} introuvable")
+
+    token_id = identity.get("current_token_id")
+    if not token_id:
+        raise HTTPException(400, detail=_NOT_ON_CHAIN)
+
+    from app.services.blockchain_service import BlockchainService
+    svc = BlockchainService()
+    tx_hash = svc.give_feedback(token_id, body.score, 0, "successRate", "VALID_SIM")
+
+    if not tx_hash:
+        raise HTTPException(503, detail="Blockchain non disponible ou giveFeedback échoué")
+
+    from app.services.eigentrust_sync import sync_eigentrust_onchain
+    _fire(sync_eigentrust_onchain())
+
+    return {"status": "ok", "tx_hash": tx_hash, "simulated_score": body.score, "token_id": token_id}
+
+
+# ── POST /{agent_id}/feedback — user star rating ──────────────────────────────
+
+@router.post("/{agent_id}/feedback")
+async def submit_feedback(agent_id: str, body: FeedbackBody):
+    """
+    User submits a star rating (1-5) for an agent.
+    Writes NewFeedback(tag1="starred", value=score×20) on-chain, then triggers EigenTrust sync.
+    """
+    if not 1 <= body.score <= 5:
+        raise HTTPException(400, detail="score doit être entre 1 et 5")
+
+    identity = get_agent_identity(agent_id)
+    if not identity:
+        raise HTTPException(404, detail=f"Agent {agent_id!r} introuvable")
+
+    token_id = identity.get("current_token_id")
+    if not token_id:
+        raise HTTPException(400, detail=_NOT_ON_CHAIN)
+
+    from app.services.blockchain_service import BlockchainService
+    svc = BlockchainService()
+    value   = body.score * 20  # 1-5 → 20-100
+    comment = body.comment[:64] if body.comment else ""
+    tx_hash = svc.give_feedback(token_id, value, 0, "starred", comment)
+
+    if not tx_hash:
+        raise HTTPException(503, detail="Blockchain non disponible ou feedback échoué")
+
+    from app.services.eigentrust_sync import sync_eigentrust_onchain
+    _fire(sync_eigentrust_onchain())
+
+    return {"status": "ok", "tx_hash": tx_hash, "stars": body.score, "value": value}
+
+
+# ── GET /{agent_id} ───────────────────────────────────────────────────────────
 
 @router.get("/{agent_id}")
 async def get_reputation(agent_id: str):
@@ -61,7 +148,7 @@ async def get_reputation(agent_id: str):
             "raw_signals": {},
             "eigentrust": None,
             "signals":    [],
-            "message":    "Agent non encore enregistré on-chain",
+            "message":    _NOT_ON_CHAIN,
         })
 
     raw_signals = get_aggregated_score(token_id)
@@ -76,11 +163,21 @@ async def get_reputation(agent_id: str):
         agents = [
             {"agent_id": row["agent_id"], "token_id": row["current_token_id"]}
             for row in all_identities
-            if row.get("current_token_id")
+            if row.get("current_token_id") and row.get("agent_type", 0) != 1
         ]
 
         if agents:
-            result = compute_eigentrust(agents)
+            from app.db.collaboration_repo import get_solo_scores, get_pipeline_scores
+            p_overrides = {}
+            for a in agents:
+                scores = get_solo_scores(a["agent_id"]) or get_pipeline_scores(a["agent_id"])
+                if scores:
+                    nonzero = [s for s in scores if s > 0]
+                    recent  = nonzero[-5:] if nonzero else []
+                    if recent:
+                        p_overrides[a["agent_id"]] = sum(recent) / len(recent)
+
+            result = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
             agent_score = result.scores_by_agent.get(agent_id)
             if agent_score:
                 eigentrust_data = {
@@ -114,13 +211,23 @@ async def get_network_scores():
         agents = [
             {"agent_id": row["agent_id"], "token_id": row["current_token_id"]}
             for row in all_identities
-            if row.get("current_token_id")
+            if row.get("current_token_id") and row.get("agent_type", 0) != 1
         ]
 
         if not agents:
             return JSONResponse({"agents": {}, "message": "Aucun agent enregistré on-chain"})
 
-        result = compute_eigentrust(agents)
+        from app.db.collaboration_repo import get_solo_scores
+        p_overrides = {}
+        for a in agents:
+            scores = get_solo_scores(a["agent_id"])
+            if scores:
+                nonzero = [s for s in scores if s > 0]
+                recent  = nonzero[-5:] if nonzero else []
+                if recent:
+                    p_overrides[a["agent_id"]] = sum(recent) / len(recent)
+
+        result = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
         return JSONResponse({
             "agents":     result.scores_by_agent,
             "converged":  result.converged,

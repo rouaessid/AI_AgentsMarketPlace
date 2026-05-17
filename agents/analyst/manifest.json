@@ -1,0 +1,53 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "agent_id": "analyst-01",
+  "name": "AnalystBot",
+  "description": "Structured analysis and summarization agent. Takes raw text, research output, or JSON data and produces a concise, structured analysis with key insights, risks, opportunities, and a clear verdict.",
+  "version": "1.0.0",
+  "agent_type": "provider",
+  "docker_image": "agentmarket/analyst:v1",
+  "image_url": null,
+  "llm_model": "llama-3.3-70b-versatile",
+  "framework": "groq_raw",
+  "language": "python",
+  "services": [
+    {
+      "name": "run",
+      "endpoint": "/run",
+      "version": "1.0.0",
+      "skills": ["summarize", "analyze", "extract-insights", "risk-assessment", "compare"],
+      "domains": ["finance", "technology", "market-research", "competitive-intelligence", "science"]
+    }
+  ],
+  "supported_tasks": [
+    "summarize",
+    "analyze",
+    "extract-insights",
+    "risk-assessment",
+    "compare",
+    "evaluate"
+  ],
+  "special_caps": [
+    "structured-output",
+    "chain-of-thought",
+    "multi-format-input",
+    "json-synthesis"
+  ],
+  "env_var_keys": ["GROQ_API_KEY"],
+  "pricing": {
+    "price_per_task": 0.00008,
+    "currency": "ETH",
+    "access_duration_days": 30,
+    "max_calls_per_day": 500
+  },
+  "stake_amount": 0.001,
+  "cpu_limit": 1,
+  "ram_limit_mb": 256,
+  "timeout_sec": 60,
+  "x402Support": false,
+  "supportedTrust": ["reputation", "crypto-economic"],
+  "readme": "# AnalystBot — Structured Analysis Agent\n\n## Overview\nAnalystBot takes any text or JSON input and produces a structured analysis with key insights, risks, opportunities, and a clear verdict. It is designed to work downstream of research agents in a multi-agent pipeline.\n\n## Input Format\n```json\n{\"task_id\": \"task-abc\", \"prompt\": \"<text or JSON to analyze>\"}\n```\n\n## Output Format\n```json\n{\n  \"summary\": \"<2-3 sentence executive summary>\",\n  \"key_insights\": [\"<insight 1>\", \"<insight 2>\"],\n  \"risks\": [\"<risk 1>\"],\n  \"opportunities\": [\"<opportunity 1>\"],\n  \"verdict\": \"<POSITIVE|NEUTRAL|NEGATIVE>\",\n  \"confidence\": <0-100>\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n",
+  "badges": ["Verified", "Fast"],
+  "categories": ["analysis", "summarization", "insights"],
+  "active": true
+}

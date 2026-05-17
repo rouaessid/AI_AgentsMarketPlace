@@ -81,7 +81,11 @@ interface IReputationRegistry {
 }
 
 interface IEscrowManager {
+    // Solo (inchangé)
     function releaseFunds(string calldata taskId, address provider, address[] calldata consensusJudges) external;
+    // Pipeline (nouveau — mode=1)
+    function releaseFundsPipeline(string calldata taskId, address[] calldata consensusJudges) external;
+    // Commun solo + pipeline
     function refundClient(string calldata taskId) external;
 }
 
@@ -99,9 +103,9 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     // ── Constantes ───────────────────────────────────────────────────────────
 
     uint8   public constant JUDGE_COUNT         = 3;
-    uint256 public constant COMMIT_WINDOW       = 1 hours;
-    uint256 public constant REVEAL_WINDOW       = 1 hours;
-    uint256 public constant STAKE_LOCK_DURATION = 3 hours;
+    uint256 public constant COMMIT_WINDOW       = 5 minutes;
+    uint256 public constant REVEAL_WINDOW       = 5 minutes;
+    uint256 public constant STAKE_LOCK_DURATION = 15 minutes;
     uint256 public constant MAX_CANDIDATES      = 20;
 
     // ERC-8004 : response est 0-100
@@ -134,8 +138,12 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     // ── Structs internes (commit-reveal) ─────────────────────────────────────
 
     struct JudgeCommit {
-        bytes32      commitHash; // keccak256(abi.encode(vote, salt))
+        bytes32      commitHash; // keccak256(abi.encode(vote, taskCompletion, outputQuality, noFabrication, toolUsage, salt))
         InternalVote vote;
+        uint8        taskCompletion; // 0-25
+        uint8        outputQuality;  // 0-25
+        uint8        noFabrication;  // 0-25
+        uint8        toolUsage;      // 0-25
         bool         committed;
         bool         revealed;
     }
@@ -148,6 +156,7 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
 
         // ERC-8004 fields
         bytes32 requestHash;      // == evidenceHash soumis par le provider
+        bytes32 traceHash;        // keccak256(trace JSON) — committed before judges run
         uint256 erc8004AgentId;   // tokenId ERC-721 du provider (agentId ERC-8004)
 
         // Cycle de vie
@@ -164,6 +173,7 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         uint8   finalResponse;    // ERC-8004 : 0-100
         string  finalTag;         // "VALID" | "INVALID" | "DISPUTED"
         uint256 score;            // Score numérique agrégé (0-100)
+        uint8   mode;             // 0 = solo, 1 = pipeline
     }
 
     // ── ERC-8004 : stockage des validations (§Read Functions) ────────────────
@@ -233,10 +243,23 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     );
 
     event VoteCommitted(string indexed taskId, string indexed judgeId);
-    event VoteRevealed (string indexed taskId, string indexed judgeId, InternalVote vote);
+    event VoteRevealed (string indexed taskId, string indexed judgeId, InternalVote vote,
+                        uint8 taskCompletion, uint8 outputQuality, uint8 noFabrication, uint8 toolUsage);
     event ProviderSlashed(string indexed agentId, address indexed wallet, uint256 amount);
     event JudgeSlashed   (string indexed agentId, address indexed wallet, uint256 amount, string reason);
     event TaskExpired    (string indexed taskId);
+
+    /**
+     * @dev Émis par finaliseValidation() pour chaque tâche clôturée.
+     *      Source de vérité pour le calcul EigenTrust off-chain (solo_history / pipeline_history).
+     *      mode : 0 = tâche solo, 1 = tâche pipeline
+     */
+    event ScoreRecorded(
+        string  agentId,
+        string  taskId,
+        uint8   score,   // score agrégé 0-100
+        uint8   mode     // 0 = solo, 1 = pipeline
+    );
 
     // ── Errors ───────────────────────────────────────────────────────────────
 
@@ -320,7 +343,9 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         string  calldata taskId_,
         string  calldata providerAgentId_,
         string  calldata requestURI_,
-        bytes32          requestHash_
+        bytes32          requestHash_,
+        bytes32          traceHash_,    // keccak256(trace JSON) — judges verify this
+        uint8            mode_          // 0 = solo, 1 = pipeline
     ) external nonReentrant {
         if (_taskExists[taskId_]) revert TaskAlreadyExists(taskId_);
 
@@ -347,9 +372,11 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         t.providerAgentId = providerAgentId_;
         t.providerWallet  = providerWallet;
         t.requestHash     = requestHash_;
+        t.traceHash       = traceHash_;
         t.erc8004AgentId  = erc8004AgentId;
         t.status          = TaskStatus.PENDING;
         t.createdAt       = block.timestamp;
+        t.mode            = mode_;
 
         _taskExists[taskId_] = true;
 
@@ -490,17 +517,27 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     // ════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Juge révèle son vote.
-     * @param taskId_  Tâche
-     * @param judgeId_ agentId du juge
-     * @param vote_    Vote original (VALID=1 ou INVALID=2)
-     * @param salt_    Sel original du commit
+     * @notice Juge révèle son vote + ses 4 scores.
+     * @param taskId_         Tâche
+     * @param judgeId_        agentId du juge
+     * @param vote_           Vote original (VALID=1 ou INVALID=2)
+     * @param salt_           Sel original du commit
+     * @param taskCompletion_ Score task_completion (0-25)
+     * @param outputQuality_  Score output_quality  (0-25)
+     * @param noFabrication_  Score no_fabrication  (0-25)
+     * @param toolUsage_      Score tool_usage      (0-25)
+     *
+     * commitHash doit être keccak256(abi.encode(vote, taskCompletion, outputQuality, noFabrication, toolUsage, salt))
      */
     function revealVote(
         string       calldata taskId_,
         string       calldata judgeId_,
         InternalVote          vote_,
-        bytes32               salt_
+        bytes32               salt_,
+        uint8                 taskCompletion_,
+        uint8                 outputQuality_,
+        uint8                 noFabrication_,
+        uint8                 toolUsage_
     ) external nonReentrant {
         ValidationTask storage t = _getTask(taskId_);
 
@@ -516,6 +553,10 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
             revert RevealWindowClosed(taskId_);
         if (vote_ == InternalVote.NONE) revert VoteIsNone();
 
+        // Validate score ranges
+        require(taskCompletion_ <= 25 && outputQuality_ <= 25 &&
+                noFabrication_ <= 25 && toolUsage_ <= 25, "Score out of range");
+
         uint256 idx      = _judgeIndexOf(t, judgeId_);
         address expected = t.judgeWallets[idx];
         if (msg.sender != expected)
@@ -525,13 +566,19 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         if (!c.committed) revert NotAJudgeOfTask(judgeId_, taskId_);
         if (c.revealed)   revert AlreadyRevealed(judgeId_);
 
-        if (keccak256(abi.encode(vote_, salt_)) != c.commitHash)
+        // Verify commit hash includes all 4 scores
+        if (keccak256(abi.encode(vote_, taskCompletion_, outputQuality_, noFabrication_, toolUsage_, salt_)) != c.commitHash)
             revert CommitMismatch(judgeId_);
 
-        c.vote     = vote_;
-        c.revealed = true;
+        c.vote           = vote_;
+        c.taskCompletion = taskCompletion_;
+        c.outputQuality  = outputQuality_;
+        c.noFabrication  = noFabrication_;
+        c.toolUsage      = toolUsage_;
+        c.revealed       = true;
 
-        emit VoteRevealed(taskId_, judgeId_, vote_);
+        emit VoteRevealed(taskId_, judgeId_, vote_,
+                          taskCompletion_, outputQuality_, noFabrication_, toolUsage_);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -580,9 +627,11 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
      *           • après la deadline reveal
      *
      * @param taskId_           Tâche
-     * @param aggregatedScore_  Score 0-100 calculé off-chain (average juges)
-     * @param justificationURI_ IPFS URI → JSON justification agrégée
-     *                          (= responseURI ERC-8004)
+     * @param justificationURI_ IPFS URI → JSON justification agrégée (= responseURI ERC-8004)
+     *
+     * Le score agrégé est calculé on-chain depuis les scores soumis par les juges.
+     * Formule : moyenne des (taskCompletion + outputQuality + noFabrication + toolUsage)
+     *           sur les juges ayant révélé.
      *
      * Effets :
      *   → consensus → verdict → tag ERC-8004 ("VALID"/"INVALID"/"DISPUTED")
@@ -592,9 +641,8 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
      *   → StakingContract.unlockStake (provider + juges)
      */
     function finaliseValidation(
-        string  calldata taskId_,
-        uint256          aggregatedScore_,
-        string  calldata justificationURI_
+        string calldata taskId_,
+        string calldata justificationURI_
     ) external nonReentrant {
         ValidationTask storage t = _getTask(taskId_);
 
@@ -605,12 +653,11 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         if (!allDone && block.timestamp <= t.revealDeadline)
             revert RevealWindowStillOpen(taskId_);
 
-        if (aggregatedScore_ > 100)
-            revert InvalidScore(aggregatedScore_);
-
-        // ── Comptage votes ────────────────────────────────────────────────────
+        // ── Comptage votes + agrégation scores on-chain ───────────────────────
         uint256 validCount   = 0;
         uint256 invalidCount = 0;
+        uint256 totalScore   = 0;
+        uint256 revealCount  = 0;
         bool[3] memory votedValid;
         bool[3] memory didReveal;
 
@@ -618,9 +665,15 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
             JudgeCommit storage c = _commits[taskId_][t.judgeIds[i]];
             if (!c.revealed) continue;
             didReveal[i] = true;
+            revealCount++;
+            totalScore += uint256(c.taskCompletion) + uint256(c.outputQuality)
+                        + uint256(c.noFabrication)  + uint256(c.toolUsage);
             if (c.vote == InternalVote.VALID)   { validCount++;   votedValid[i] = true; }
             if (c.vote == InternalVote.INVALID) { invalidCount++; }
         }
+
+        // Score agrégé = moyenne des scores individuels (0-100)
+        uint256 aggregatedScore = revealCount > 0 ? totalScore / revealCount : 0;
 
         // ── Verdict ───────────────────────────────────────────────────────────
         uint8  erc8004Response;
@@ -639,8 +692,10 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
 
         t.finalResponse = erc8004Response;
         t.finalTag      = tag;
-        t.score         = aggregatedScore_;
+        t.score         = aggregatedScore;
         t.status        = TaskStatus.FINALISED;
+
+        emit ScoreRecorded(t.providerAgentId, taskId_, uint8(aggregatedScore), t.mode);
 
         // ── ERC-8004 : enregistrer la réponse ────────────────────────────────
         _recordValidationResponse(
@@ -658,15 +713,21 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
 
             // ── Escrow paiement ────────────────────────────────────────────────
             if (address(escrowManager) != address(0)) {
+                // Collecte les juges ayant voté VALID (commun solo + pipeline)
+                address[] memory validJudges = new address[](validCount);
+                uint256 idx = 0;
+                for (uint8 i = 0; i < JUDGE_COUNT; i++) {
+                    if (votedValid[i]) validJudges[idx++] = t.judgeWallets[i];
+                }
+
                 if (providerValid) {
-                    address[] memory validJudges = new address[](validCount);
-                    uint256 idx = 0;
-                    for (uint8 i = 0; i < JUDGE_COUNT; i++) {
-                        if (votedValid[i]) {
-                            validJudges[idx++] = t.judgeWallets[i];
-                        }
+                    if (t.mode == 1) {
+                        // Pipeline : EscrowManager lit ses propres shares stockées
+                        try escrowManager.releaseFundsPipeline(taskId_, validJudges) {} catch {}
+                    } else {
+                        // Solo : release standard vers un seul provider
+                        try escrowManager.releaseFunds(taskId_, t.providerWallet, validJudges) {} catch {}
                     }
-                    try escrowManager.releaseFunds(taskId_, t.providerWallet, validJudges) {} catch {}
                 } else {
                     try escrowManager.refundClient(taskId_) {} catch {}
                 }
@@ -851,6 +912,11 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         external view returns (ValidationTask memory)
     { return _getTask(taskId_); }
 
+    /// @notice Returns the committed trace hash for a task — judges can verify trace integrity.
+    function getTraceHash(string calldata taskId_)
+        external view returns (bytes32)
+    { return _getTask(taskId_).traceHash; }
+
     function getJudgeCommit(string calldata taskId_, string calldata judgeId_)
         external view returns (JudgeCommit memory)
     { return _commits[taskId_][judgeId_]; }
@@ -932,6 +998,31 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
      *  Judge ABSENT     → slashJudge()           (StakingContract)
      *                     -REP_JUDGE_ABSENT      (ReputationRegistry)
      */
+    // ════════════════════════════════════════════════════════════════════════
+    //  PIPELINE SCORING — recordPipelineScores
+    // ════════════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice Émet ScoreRecorded(mode=1) pour chaque agent d'un pipeline.
+     *         Appelé par le backend (owner) après finaliseValidation du lead agent.
+     *         Permet à l'indexeur de peupler collaboration_log pour tous les
+     *         participants du pipeline → EigenTrust C[i][j] via ATE.
+     *
+     * @param agentIds_ Liste des agentIds participants (hors lead déjà scoré)
+     * @param taskId_   ID de la tâche pipeline
+     * @param scores_   Score 0-100 par agent (même longueur que agentIds_)
+     */
+    function recordPipelineScores(
+        string[] calldata agentIds_,
+        string   calldata taskId_,
+        uint8[]  calldata scores_
+    ) external onlyOwner {
+        require(agentIds_.length == scores_.length, "length mismatch");
+        for (uint256 i = 0; i < agentIds_.length; i++) {
+            emit ScoreRecorded(agentIds_[i], taskId_, scores_[i], 1);
+        }
+    }
+
     function _applyOutcomes(
         ValidationTask storage t,
         bool            providerValid,

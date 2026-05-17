@@ -26,11 +26,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class JudgeResult:
-    judge_id:      str
-    judge_name:    str
-    score:         int          # 0-100
-    justification: str
-    verdict:       str          # "VALID" | "INVALID"
+    judge_id:         str
+    judge_name:       str
+    score:            int          # 0-100, recalculé par la plateforme
+    justification:    str
+    verdict:          str          # "VALID" | "INVALID"
+    criteria:         dict = None  # {"task_completion": N, "output_quality": N}
+    trajectory_check: dict = None  # {"steps_count": N, "first_tool": S, ...}
+
+    def __post_init__(self):
+        if self.criteria is None:
+            self.criteria = {}
+        if self.trajectory_check is None:
+            self.trajectory_check = {}
 
 
 @dataclass

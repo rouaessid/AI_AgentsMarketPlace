@@ -13,30 +13,41 @@ Il expose juste un endpoint POST /run qui prend un prompt et retourne un résult
 from __future__ import annotations
 import os
 import uuid
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from agent import ResearchAgent
 
-# ── Config ────────────────────────────────────────────────────────────────────
 AGENT_ID   = "researcher-01"
 AGENT_NAME = "ResearchBot"
 
-GROQ_API_KEY   = os.environ["GROQ_API_KEY"]
-TAVILY_API_KEY = os.environ["TAVILY_API_KEY"]
-
-# ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title=AGENT_NAME, version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
 _agent: ResearchAgent | None = None
+_startup_error: str | None = None
 
 
-@app.on_event("startup")
-def startup():
-    global _agent
-    _agent = ResearchAgent(groq_api_key=GROQ_API_KEY, tavily_api_key=TAVILY_API_KEY)
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    global _agent, _startup_error
+    groq_key   = os.environ.get("GROQ_API_KEY", "")
+    tavily_key = os.environ.get("TAVILY_API_KEY", "")
+    if not groq_key or not tavily_key:
+        missing = [k for k, v in {"GROQ_API_KEY": groq_key, "TAVILY_API_KEY": tavily_key}.items() if not v]
+        _startup_error = f"Missing env vars: {', '.join(missing)}"
+        print(f"[researcher] ERROR: {_startup_error}", flush=True)
+    else:
+        try:
+            _agent = ResearchAgent(groq_api_key=groq_key, tavily_api_key=tavily_key)
+            print("[researcher] Agent ready", flush=True)
+        except Exception as e:
+            _startup_error = str(e)
+            print(f"[researcher] Startup failed: {e}", flush=True)
+    yield
+
+
+app = FastAPI(title=AGENT_NAME, version="1.0.0", lifespan=_lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -54,29 +65,31 @@ class RunResponse(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
+    if _startup_error:
+        return {"status": "error", "agent": AGENT_ID, "message": _startup_error}
     return {"status": "ok", "agent": AGENT_ID}
 
 
-@app.get(f"/api/v1/agents/{AGENT_ID}")
+@app.get("/info")
 def info():
     return {"agent_id": AGENT_ID, "name": AGENT_NAME, "version": "1.0.0", "status": "active"}
 
 
-@app.post(f"/api/v1/agents/{AGENT_ID}/run", response_model=RunResponse)
+@app.post("/run", response_model=RunResponse)
 async def run(req: RunRequest):
-    """
-    Main endpoint called by the platform after a buyer submits a task.
-    The platform wraps this call with its proxy → traces all HTTP calls automatically.
-    """
     if not _agent:
         raise HTTPException(503, "Agent not ready")
 
     task_id = req.task_id or f"task-{uuid.uuid4().hex[:8]}"
 
     try:
-        # agent.run() makes HTTP calls (Groq API + Tavily API)
-        # → all captured automatically by platform proxy
-        result = _agent.run(query=req.prompt, task_id=task_id)
+        import asyncio, functools
+        loop = asyncio.get_event_loop()
+        # Run blocking sync code in a thread so the event loop stays free
+        # (allows /health to respond during long Groq/Tavily calls)
+        result = await loop.run_in_executor(
+            None, functools.partial(_agent.run, query=req.prompt, task_id=task_id)
+        )
         return RunResponse(task_id=task_id, output=result["output"])
     except Exception as e:
         raise HTTPException(500, str(e))

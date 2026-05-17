@@ -54,6 +54,12 @@ class AgentRegistrationFile(BaseModel):
     stake_amount:   float                        = 0.0
     created_at:     str | None                   = None
     updated_at:     str | None                   = None
+    # Judge-specific fields (ignored for provider agents)
+    evaluation_skills:      list[str] = Field(default_factory=list)
+    validated_task_types:   list[str] = Field(default_factory=list)
+    evaluation_domains:     list[str] = Field(default_factory=list)
+    tools_used:             list[str] = Field(default_factory=list)
+    evaluation_style:       str       = ""
 
 
 class AgentSubmitRequest(BaseModel):
@@ -97,13 +103,19 @@ class AgentSubmitRequest(BaseModel):
     cpu_limit:       int   = Field(1, ge=1, le=8)
     ram_limit_mb:    int   = Field(512, ge=128, le=8192)
     timeout_sec:     int   = Field(60, ge=5, le=600)
-    price_per_task:       float = Field(0.10, ge=0.0, description="USDC par appel")
+    price_per_task:       float = Field(0.0001, ge=0.0, description="ETH par appel")
     access_duration_days: int   = Field(30, ge=1, description="Duree acces en jours")
     max_calls_per_day:    int   = Field(100, ge=1, description="Appels max par jour")
     stake_amount:    float = Field(
-        0.5, ge=0.0,
-        description="ETH a staker — StakingContract Phase 2"
+        0.002, ge=0.0,
+        description="ETH a staker — StakingContract"
     )
+    # Judge-specific capability fields (ignored for provider agents)
+    evaluation_skills:      list[str] = Field(default_factory=list)
+    validated_task_types:   list[str] = Field(default_factory=list)
+    evaluation_domains:     list[str] = Field(default_factory=list)
+    tools_used:             list[str] = Field(default_factory=list)
+    evaluation_style:       str       = ""
 
 
 class AgentNewVersionRequest(BaseModel):

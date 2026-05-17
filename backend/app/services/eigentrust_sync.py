@@ -72,8 +72,8 @@ async def sync_eigentrust_onchain() -> None:
     if not settings.reputation_registry_address:
         logger.debug("EigenTrust sync ignoré : REPUTATION_REGISTRY_ADDRESS non défini")
         return
-    if not settings.platform_private_key:
-        logger.debug("EigenTrust sync ignoré : PLATFORM_PRIVATE_KEY non défini")
+    if not settings.feedback_wallet_key and not settings.platform_private_key:
+        logger.debug("EigenTrust sync ignoré : aucun wallet de feedback configuré")
         return
 
     try:
@@ -92,14 +92,24 @@ def _sync_blocking() -> None:
     agents = [
         {"agent_id": row["agent_id"], "token_id": row["current_token_id"]}
         for row in all_identities
-        if row.get("current_token_id")
+        if row.get("current_token_id") and row.get("agent_type", 0) != 1
     ]
 
     if not agents:
         logger.debug("EigenTrust sync : aucun agent enregistré on-chain")
         return
 
-    result = compute_eigentrust(agents)
+    from app.db.collaboration_repo import get_solo_scores, get_pipeline_scores
+    p_overrides = {}
+    for a in agents:
+        scores = get_solo_scores(a["agent_id"]) or get_pipeline_scores(a["agent_id"])
+        if scores:
+            nonzero = [s for s in scores if s > 0]
+            recent  = nonzero[-5:] if nonzero else []
+            if recent:
+                p_overrides[a["agent_id"]] = sum(recent) / len(recent)
+
+    result = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
     if not result.scores_by_agent:
         return
 
@@ -114,7 +124,9 @@ def _sync_blocking() -> None:
         address=Web3.to_checksum_address(settings.reputation_registry_address),
         abi=_GIVE_FEEDBACK_ABI,
     )
-    account = Account.from_key(settings.platform_private_key)
+    # Use feedback_wallet_key — NOT platform key (platform owns all tokens → AgentOwnerCannotRate)
+    signing_key = settings.feedback_wallet_key or settings.platform_private_key
+    account = Account.from_key(signing_key)
     nonce   = w3.eth.get_transaction_count(account.address, "pending")
 
     written = 0

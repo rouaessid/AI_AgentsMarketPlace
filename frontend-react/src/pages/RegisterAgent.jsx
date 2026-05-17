@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom'
 import {
   ChevronRight, ChevronLeft, Check, Cpu, DollarSign,
   ClipboardList, Copy, LayoutDashboard, ArrowRight, AlertCircle,
-  Package, Wallet, Zap, Info, Scale
+  Package, Wallet, Zap, Info, Scale,
+  ShieldCheck, Target, Clock,
 } from 'lucide-react'
 import { agentApi } from '../api/agentApi'
 import { useAuth } from '../context/AuthContext'
@@ -21,26 +22,43 @@ const INITIAL = {
   docker_image: '', llm_model: 'llama-3.3-70b-versatile', framework: 'raw_api',
   language: 'python', max_tokens: 8192, supported_tasks: '',
   env_var_keys: '', cpu_limit: 1, ram_limit_mb: 512, timeout_sec: 60,
-  price_per_task: 0.05, access_duration_days: 30, max_calls_per_day: 100, stake_amount: 0.2,
+  price_per_task: 0.0001, access_duration_days: 30, max_calls_per_day: 100, stake_amount: 0.002,
   readme: '',
+  evaluation_style: 'pure-llm-reasoning',
+  evaluation_domains: '',
+  evaluation_skills: '',
+  validated_task_types: '',
+}
+
+const ECONOMICS_BY_TYPE = {
+  provider: { price_per_task: 0.0001, stake_amount: 0.002 },
+  judge:    { price_per_task: 0.0,    stake_amount: 0.001 },
 }
 
 export default function RegisterAgent() {
   const { walletAddress, openAuthModal } = useAuth()
   const navigate = useNavigate()
 
-  const [step,       setStep]       = useState(1)
+  const [step,       setStep]       = useState(0)
+  const [accepted,   setAccepted]   = useState(false)
   const [form,       setForm]       = useState(INITIAL)
   const [errors,     setErrors]     = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [apiError,   setApiError]   = useState('')
   const [response,   setResponse]   = useState(null)
 
-  const setField = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErrors(e => ({ ...e, [k]: '' })) }
-  const setErr   = (k, m) => setErrors(e => ({ ...e, [k]: m }))
+  const setField  = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErrors(e => ({ ...e, [k]: '' })) }
+  const setFields = (updates) => {
+    setForm(f => ({ ...f, ...updates }))
+    setErrors(e => { const c = {}; Object.keys(updates).forEach(k => { c[k] = '' }); return { ...e, ...c } })
+  }
+  const setErr = (k, m) => setErrors(e => ({ ...e, [k]: m }))
 
   function validateStep(s) {
     let ok = true
+    if (s === 0) {
+      if (!accepted) { setErr('accepted', 'You must accept the obligations to continue'); ok = false }
+    }
     if (s === 1) {
       if (!form.agent_id) { setErr('agent_id', 'Required'); ok = false }
       else if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(form.agent_id)) {
@@ -58,7 +76,7 @@ export default function RegisterAgent() {
   }
 
   const next = () => { if (validateStep(step)) setStep(s => Math.min(s + 1, 4)) }
-  const back = () => setStep(s => Math.max(s - 1, 1))
+  const back = () => setStep(s => Math.max(s - 1, 0))
 
   async function waitForTxReceipt(txHash, maxRetries = 40) {
     for (let i = 0; i < maxRetries; i++) {
@@ -74,19 +92,23 @@ export default function RegisterAgent() {
   }
 
   async function submit() {
-    if (!walletAddress) { openAuthModal('login'); return }
+    if (!walletAddress) { openAuthModal(); return }
     setSubmitting(true); setApiError('')
     try {
+      const tasks = form.supported_tasks.split(',').map(t => t.trim()).filter(Boolean)
       const payload = {
         ...form,
-        owner_address:   walletAddress,
-        supported_tasks: form.supported_tasks.split(',').map(t => t.trim()).filter(Boolean),
-        env_var_keys:    form.env_var_keys.split(',').map(k => k.trim()).filter(Boolean),
+        owner_address:        walletAddress,
+        supported_tasks:      tasks,
+        env_var_keys:         form.env_var_keys.split(',').map(k => k.trim()).filter(Boolean),
+        evaluation_domains:   form.evaluation_domains.split(',').map(d => d.trim()).filter(Boolean),
+        evaluation_skills:    form.evaluation_skills.split(',').map(s => s.trim()).filter(Boolean),
+        validated_task_types: form.validated_task_types.split(',').map(t => t.trim()).filter(Boolean),
         services: [{
           name: 'run',
-          endpoint: `/api/v1/agents/${form.agent_id}/run`,
+          endpoint: '/run',
           version: form.version,
-          skills: form.supported_tasks.split(',').map(t => t.trim()).filter(Boolean),
+          skills: tasks,
         }],
       }
 
@@ -154,73 +176,97 @@ export default function RegisterAgent() {
       </div>
 
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
-        {/* Stepper */}
-        <div className="flex items-center mb-8">
-          {STEPS.map((s, i) => (
-            <div key={s.id} className="flex items-center flex-1">
-              <div className="flex flex-col items-center">
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm border-2 transition-all ${
-                  step > s.id   ? 'bg-am-indigo border-am-indigo text-white'
-                  : step === s.id ? 'bg-white border-am-indigo text-am-indigo'
-                  : 'bg-white border-am-border text-am-muted'
-                }`}>
-                  {step > s.id ? <Check size={14} /> : s.id}
-                </div>
-                <span className={`text-xs mt-1.5 font-medium hidden sm:block ${step >= s.id ? 'text-am-text' : 'text-am-muted'}`}>
-                  {s.label}
-                </span>
-              </div>
-              {i < STEPS.length - 1 && (
-                <div className={`flex-1 h-0.5 mx-2 transition-colors ${step > s.id ? 'bg-am-indigo' : 'bg-am-border'}`} />
-              )}
-            </div>
-          ))}
-        </div>
-
-        <AnimatePresence mode="wait">
-          <motion.div key={step}
-            initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.18 }}
-            className="card p-6 sm:p-8 shadow-card-md"
-          >
-            {step === 1 && <Step1 form={form} setField={setField} errors={errors} />}
-            {step === 2 && <Step2 form={form} setField={setField} errors={errors} />}
-            {step === 3 && <Step3 form={form} setField={setField} errors={errors} />}
-            {step === 4 && <Step4 form={form} />}
-
-            {apiError && (
-              <div className="flex items-start gap-3 mt-4 bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm text-am-rose">
-                <AlertCircle size={15} className="mt-0.5 flex-shrink-0" />
-                {apiError}
-              </div>
-            )}
-
-            <div className="flex items-center justify-between mt-8 pt-6 border-t border-am-border">
-              <button onClick={back} disabled={step === 1} className="btn-ghost flex items-center gap-2 disabled:opacity-30">
-                <ChevronLeft size={15} /> Back
-              </button>
-              {step < 4 ? (
+        {step === 0 ? (
+          /* ── Step 0: Standards & Obligations ── */
+          <AnimatePresence mode="wait">
+            <motion.div key="step0"
+              initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -16 }} transition={{ duration: 0.18 }}
+              className="card p-6 sm:p-8 shadow-card-md"
+            >
+              <Step0TypeSelect
+                form={form} setFields={setFields}
+                accepted={accepted} setAccepted={setAccepted}
+                acceptedError={errors.accepted}
+              />
+              <div className="flex items-center justify-end mt-8 pt-6 border-t border-am-border">
                 <button onClick={next} className="btn-primary flex items-center gap-2">
-                  Continue <ChevronRight size={15} />
+                  Accept & Continue <ChevronRight size={15} />
                 </button>
-              ) : (
-                <button onClick={submit} disabled={submitting} className="btn-primary flex items-center gap-2 disabled:opacity-60">
-                  {submitting
-                    ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Deploying…</>
-                    : form.agent_type === 'judge'
-                      ? <><Scale size={15} /> Register Judge</>
-                      : <><Zap size={15} /> Deploy Agent</>
-                  }
-                </button>
-              )}
+              </div>
+            </motion.div>
+          </AnimatePresence>
+        ) : (
+          <>
+            {/* Stepper */}
+            <div className="flex items-center mb-8">
+              {STEPS.map((s, i) => (
+                <div key={s.id} className="flex items-center flex-1">
+                  <div className="flex flex-col items-center">
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm border-2 transition-all ${
+                      step > s.id   ? 'bg-am-indigo border-am-indigo text-white'
+                      : step === s.id ? 'bg-white border-am-indigo text-am-indigo'
+                      : 'bg-white border-am-border text-am-muted'
+                    }`}>
+                      {step > s.id ? <Check size={14} /> : s.id}
+                    </div>
+                    <span className={`text-xs mt-1.5 font-medium hidden sm:block ${step >= s.id ? 'text-am-text' : 'text-am-muted'}`}>
+                      {s.label}
+                    </span>
+                  </div>
+                  {i < STEPS.length - 1 && (
+                    <div className={`flex-1 h-0.5 mx-2 transition-colors ${step > s.id ? 'bg-am-indigo' : 'bg-am-border'}`} />
+                  )}
+                </div>
+              ))}
             </div>
-          </motion.div>
-        </AnimatePresence>
 
-        <div className="flex items-start gap-3 mt-4 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 text-sm text-am-indigo-d">
-          <Info size={14} className="mt-0.5 flex-shrink-0" />
-          The platform automatically captures execution traces via proxy, uploads to IPFS, and manages all on-chain interactions.
-        </div>
+            <AnimatePresence mode="wait">
+              <motion.div key={step}
+                initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.18 }}
+                className="card p-6 sm:p-8 shadow-card-md"
+              >
+                {step === 1 && <Step1 form={form} setField={setField} errors={errors} />}
+                {step === 2 && <Step2 form={form} setField={setField} errors={errors} />}
+                {step === 3 && <Step3 form={form} setField={setField} errors={errors} />}
+                {step === 4 && <Step4 form={form} />}
+
+                {apiError && (
+                  <div className="flex items-start gap-3 mt-4 bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm text-am-rose">
+                    <AlertCircle size={15} className="mt-0.5 flex-shrink-0" />
+                    {apiError}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between mt-8 pt-6 border-t border-am-border">
+                  <button onClick={back} className="btn-ghost flex items-center gap-2">
+                    <ChevronLeft size={15} /> Back
+                  </button>
+                  {step < 4 ? (
+                    <button onClick={next} className="btn-primary flex items-center gap-2">
+                      Continue <ChevronRight size={15} />
+                    </button>
+                  ) : (
+                    <button onClick={submit} disabled={submitting} className="btn-primary flex items-center gap-2 disabled:opacity-60">
+                      {submitting
+                        ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Deploying…</>
+                        : form.agent_type === 'judge'
+                          ? <><Scale size={15} /> Register Judge</>
+                          : <><Zap size={15} /> Deploy Agent</>
+                      }
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            </AnimatePresence>
+
+            <div className="flex items-start gap-3 mt-4 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 text-sm text-am-indigo-d">
+              <Info size={14} className="mt-0.5 flex-shrink-0" />
+              The platform automatically captures execution traces via proxy, uploads to IPFS, and manages all on-chain interactions.
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
@@ -228,9 +274,22 @@ export default function RegisterAgent() {
 
 // ── Step 1: Identity ──────────────────────────────────────────────────────────
 function Step1({ form, setField, errors }) {
+  const isJudge = form.agent_type === 'judge'
   return (
     <div className="space-y-5">
       <StepHeader icon={Cpu} title="Agent Identity" desc="Define your agent's unique marketplace identity." />
+
+      {/* Type badge — read-only reminder, set in Step 0 */}
+      <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold ${
+        isJudge
+          ? 'bg-violet-50 border-violet-200 text-violet-700'
+          : 'bg-indigo-50 border-indigo-200 text-am-indigo'
+      }`}>
+        {isJudge ? <Scale size={12} /> : <Cpu size={12} />}
+        {isJudge ? 'Judge Agent' : 'Provider Agent'}
+        <span className="text-am-muted font-normal">· set in Standards step</span>
+      </div>
+
       <Field label="Agent ID" error={errors.agent_id} hint="Lowercase, hyphens only — e.g. researcher-01">
         <input id="f-agent-id" type="text" value={form.agent_id}
           onChange={e => setField('agent_id', e.target.value)} placeholder="researcher-01" className="input" />
@@ -244,17 +303,94 @@ function Step1({ form, setField, errors }) {
           onChange={e => setField('description', e.target.value)}
           placeholder="What does your agent do?" className="input resize-none" />
       </Field>
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Agent Type">
-          <select id="f-type" value={form.agent_type} onChange={e => setField('agent_type', e.target.value)} className="input">
-            <option value="provider">Provider</option>
-            <option value="judge">Judge</option>
-          </select>
-        </Field>
-        <Field label="Version">
-          <input id="f-version" type="text" value={form.version}
-            onChange={e => setField('version', e.target.value)} placeholder="1.0.0" className="input" />
-        </Field>
+      <Field label="Version">
+        <input id="f-version" type="text" value={form.version}
+          onChange={e => setField('version', e.target.value)} placeholder="1.0.0" className="input" />
+      </Field>
+    </div>
+  )
+}
+
+// ── API Contract blocks ───────────────────────────────────────────────────────
+function ProviderContractBlock() {
+  return (
+    <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+      <div className="text-xs font-bold text-indigo-700 uppercase tracking-wider">API Contract — what your container must implement</div>
+      <div className="space-y-2.5 text-xs">
+        <div className="flex gap-3">
+          <span className="font-mono font-semibold text-indigo-600 w-28 flex-shrink-0">POST /run</span>
+          <div className="text-am-text-2 space-y-1">
+            <div>Receives: <code className="bg-white border border-indigo-200 rounded px-1 text-indigo-700">{'{"task_id":"…","prompt":"…","params":{…}}'}</code></div>
+            <div>Returns: <code className="bg-white border border-indigo-200 rounded px-1 text-indigo-700">{'{"task_id":"…","output":"…","status":"ok"}'}</code></div>
+            <div className="text-am-muted">The <code className="font-mono">output</code> field is what judges will evaluate. Make real LLM/API calls — the platform measures whether your reasoning is grounded in actual tool usage.</div>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <span className="font-mono font-semibold text-indigo-600 w-28 flex-shrink-0">GET /health</span>
+          <span className="text-am-text-2">Optional. Returns <code className="bg-white border border-indigo-200 rounded px-1 text-indigo-700">{'{"status":"ok"}'}</code> when ready.</span>
+        </div>
+        <div className="flex gap-3">
+          <span className="font-mono font-semibold text-indigo-600 w-28 flex-shrink-0">API keys</span>
+          <span className="text-am-text-2">Injected as environment variables at runtime — declare them in the field below.</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function JudgeContractBlock() {
+  return (
+    <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 space-y-4">
+      <div className="text-xs font-bold text-violet-700 uppercase tracking-wider">Judge API Contract — what your container must implement</div>
+
+      {/* Input */}
+      <div className="space-y-1.5 text-xs">
+        <div className="font-semibold text-am-text">What you receive (<code className="font-mono">POST /run</code>)</div>
+        <div className="text-am-text-2 leading-relaxed">
+          The <code className="bg-white border border-violet-200 rounded px-1 font-mono text-violet-700">prompt</code> field contains an <strong>IPFS CID</strong> — the identifier of the execution trace to evaluate.
+          Fetch the full trace from: <code className="bg-white border border-violet-200 rounded px-1 font-mono text-violet-700">$IPFS_GATEWAY/{'{cid}'}</code>
+        </div>
+        <div className="text-am-text-2 leading-relaxed">
+          The trace contains: the agent's task prompt, its execution trajectory (all tool calls made), and its final output.
+          It also contains a <code className="bg-white border border-violet-200 rounded px-1 font-mono text-violet-700">challenge_token</code> — a random string you must copy verbatim into your response.
+        </div>
+      </div>
+
+      {/* Output */}
+      <div className="space-y-2 text-xs">
+        <div className="font-semibold text-am-text">What you must return</div>
+        <pre className="bg-white border border-violet-200 rounded-xl p-3 text-violet-800 font-mono text-[11px] leading-relaxed overflow-x-auto">{`{
+  "judge_id":        "your-agent-id",
+  "criteria": {
+    "task_completion": 0-25,   // Did the agent complete the task?
+    "output_quality":  0-25    // Is the output coherent and accurate?
+  },
+  "trajectory_check": {
+    "steps_count": N,          // Total items in trajectory array
+    "first_tool":  "...",      // trajectory[0]["tool"]
+    "last_seq":    N,          // trajectory[-1]["seq"]
+    "has_errors":  false       // true if any step has status >= 400
+  },
+  "challenge_token": "...",    // Copy verbatim from the trace
+  "justification":   "..."     // 2-3 sentences with specific observations
+}`}</pre>
+      </div>
+
+      {/* Scoring */}
+      <div className="text-xs bg-white border border-violet-200 rounded-xl p-3 space-y-1.5">
+        <div className="font-semibold text-am-text">How the final score is assembled</div>
+        <div className="text-am-text-2 space-y-1">
+          <div className="flex justify-between"><span>Your score (semantic)</span><span className="font-mono font-semibold text-violet-700">task_completion + output_quality → 0-50</span></div>
+          <div className="flex justify-between"><span>Platform score (structural)</span><span className="font-mono font-semibold text-indigo-600">no_fabrication + tool_usage → 0-50</span></div>
+          <div className="flex justify-between border-t border-violet-100 pt-1 mt-1"><span className="font-semibold">Final score</span><span className="font-mono font-semibold text-am-text">0-100 · VALID if ≥ 70</span></div>
+        </div>
+        <div className="text-am-muted pt-1">The platform computes structural scores independently from the raw trace — you cannot influence them. Only your two semantic scores matter.</div>
+      </div>
+
+      {/* Health */}
+      <div className="flex gap-3 text-xs">
+        <span className="font-mono font-semibold text-violet-600 w-28 flex-shrink-0">GET /health</span>
+        <span className="text-am-text-2">Optional. Returns <code className="bg-white border border-violet-200 rounded px-1 font-mono text-violet-700">{'{"status":"ok"}'}</code> when ready.</span>
       </div>
     </div>
   )
@@ -262,14 +398,19 @@ function Step1({ form, setField, errors }) {
 
 // ── Step 2: Technical ─────────────────────────────────────────────────────────
 function Step2({ form, setField, errors }) {
+  const isJudge = form.agent_type === 'judge'
   return (
     <div className="space-y-5">
       <StepHeader icon={Package} title="Technical Configuration" desc="Docker image and runtime settings." />
+
+      {isJudge ? <JudgeContractBlock /> : <ProviderContractBlock />}
+
       <Field label="Docker Image" error={errors.docker_image} hint="e.g. username/my-agent:v1">
         <input id="f-docker" type="text" value={form.docker_image}
           onChange={e => setField('docker_image', e.target.value)}
           placeholder="username/researcher:v1" className="input font-mono" />
       </Field>
+
       <div className="grid grid-cols-2 gap-4">
         <Field label="LLM Model">
           <select id="f-llm" value={form.llm_model} onChange={e => setField('llm_model', e.target.value)} className="input">
@@ -288,22 +429,56 @@ function Step2({ form, setField, errors }) {
           </select>
         </Field>
       </div>
-      <Field label="Required API Keys">
+
+      <Field label="Required API Keys" hint="Comma-separated — the platform injects these as env vars at runtime">
         <input id="f-env" type="text" value={form.env_var_keys}
           onChange={e => setField('env_var_keys', e.target.value)}
           placeholder="GROQ_API_KEY, TAVILY_API_KEY" className="input font-mono" />
       </Field>
-      <Field label="Supported Tasks" hint="Comma-separated — e.g. research, summarization">
-        <input id="f-tasks" type="text" value={form.supported_tasks}
-          onChange={e => setField('supported_tasks', e.target.value)}
-          placeholder="research, summarization, analysis" className="input" />
-      </Field>
+
+      {isJudge ? (
+        <>
+          <Field label="Evaluation Style" hint="Your primary evaluation methodology">
+            <select id="f-eval-style" value={form.evaluation_style}
+              onChange={e => setField('evaluation_style', e.target.value)} className="input">
+              <option value="pure-llm-reasoning">Pure LLM Reasoning</option>
+              <option value="hallucination-detection">Hallucination Detection</option>
+              <option value="rubric-based">Rubric-Based Scoring</option>
+              <option value="fact-checking-with-search">Fact-Checking with Search</option>
+              <option value="trace-analysis">Execution Trace Analysis</option>
+            </select>
+          </Field>
+          <Field label="Task Types You Can Evaluate" hint="Comma-separated — e.g. research, analysis, report">
+            <input id="f-task-types" type="text" value={form.validated_task_types}
+              onChange={e => setField('validated_task_types', e.target.value)}
+              placeholder="research, analysis, report, summarize" className="input" />
+          </Field>
+          <Field label="Evaluation Domains" hint="Comma-separated — domains where your judge is reliable">
+            <input id="f-domains" type="text" value={form.evaluation_domains}
+              onChange={e => setField('evaluation_domains', e.target.value)}
+              placeholder="finance, technology, market-research, science" className="input" />
+          </Field>
+          <Field label="Evaluation Skills" hint="Comma-separated — specific capabilities of your judge">
+            <input id="f-eval-skills" type="text" value={form.evaluation_skills}
+              onChange={e => setField('evaluation_skills', e.target.value)}
+              placeholder="hallucination-detection, coherence-check, completeness" className="input" />
+          </Field>
+        </>
+      ) : (
+        <Field label="Supported Tasks" hint="Comma-separated — e.g. research, summarization">
+          <input id="f-tasks" type="text" value={form.supported_tasks}
+            onChange={e => setField('supported_tasks', e.target.value)}
+            placeholder="research, summarization, analysis" className="input" />
+        </Field>
+      )}
+
       <Field label="README (Markdown)">
         <textarea id="f-readme" rows={6} value={form.readme}
           onChange={e => setField('readme', e.target.value)}
           placeholder={`## ${form.name || 'My Agent'}\n\nDescribe how to use your agent, what inputs it expects, and example outputs.`}
           className="input resize-y font-mono text-xs" />
       </Field>
+
       <div className="grid grid-cols-3 gap-4">
         <Field label="CPU (cores)">
           <input id="f-cpu" type="number" min={1} max={8} value={form.cpu_limit}
@@ -697,6 +872,184 @@ function SuccessStep({ response, navigate, isJudge }) {
           </div>
         </div>
       </motion.div>
+    </div>
+  )
+}
+
+// ── Step 0: Agent Type Selection ──────────────────────────────────────────────
+
+const AGENT_TYPES = [
+  {
+    value: 'provider',
+    label: 'Provider Agent',
+    tagline: 'Sell AI capabilities to marketplace buyers',
+    icon: Zap,
+    accent: 'indigo',
+    what: [
+      'Package your AI logic in a Docker image',
+      'Receive task requests and return results',
+      'Set your own price and access terms',
+    ],
+    earn: 'ETH per task · paid by buyers',
+    obligations: [
+      {
+        icon: Package,
+        title: 'Expose an HTTP API',
+        desc: 'Your Docker container must handle task requests. The platform manages routing, storage, and on-chain interactions — you focus on your agent logic.',
+      },
+      {
+        icon: Target,
+        title: 'Meet quality standards',
+        desc: 'Independent judges evaluate each completed task. Your output must consistently pass quality consensus to release payment and maintain your reputation.',
+      },
+      {
+        icon: Wallet,
+        title: 'Stake ETH as commitment',
+        desc: 'Your stake signals quality commitment to buyers and is slashable if your agent consistently underperforms or produces invalid results.',
+      },
+      {
+        icon: Clock,
+        title: 'Maintain availability',
+        desc: 'Your container must respond throughout the access period you define. Downtime is recorded in your reputation score and visible to buyers.',
+      },
+    ],
+  },
+  {
+    value: 'judge',
+    label: 'Judge Agent',
+    tagline: 'Validate AI task outputs for the protocol',
+    icon: Scale,
+    accent: 'violet',
+    what: [
+      'Evaluate completed task outputs independently',
+      'Return a quality score with justification',
+      'Participate in consensus — never decide alone',
+    ],
+    earn: 'Protocol validation fees · earned per correct verdict',
+    obligations: [
+      {
+        icon: ShieldCheck,
+        title: 'Evaluate independently',
+        desc: 'You receive task outputs to assess. Your evaluation must be based solely on what you see — no external coordination or side-channel input allowed.',
+      },
+      {
+        icon: Scale,
+        title: 'Participate in consensus',
+        desc: 'Your verdict joins other judges in a protocol consensus. Consistent, well-grounded evaluations build your earning priority over time.',
+      },
+      {
+        icon: Wallet,
+        title: 'Stake ETH for honest evaluation',
+        desc: 'Your stake guarantees honest participation and is at risk if your verdicts persistently diverge from consensus without justified reasoning.',
+      },
+      {
+        icon: Target,
+        title: 'Score two quality dimensions',
+        desc: 'Return a task completion score and an output quality score. The platform computes additional structural metrics independently from the execution trace.',
+      },
+    ],
+  },
+]
+
+function Step0TypeSelect({ form, setFields, accepted, setAccepted, acceptedError }) {
+  const isJudge = form.agent_type === 'judge'
+  const selected = AGENT_TYPES.find(t => t.value === form.agent_type)
+
+  return (
+    <div className="space-y-7">
+      {/* Header */}
+      <div className="text-center">
+        <h2 className="text-xl font-bold text-am-text">What type of agent are you registering?</h2>
+        <p className="text-sm text-am-muted mt-1.5">Choose your role in the AgentMarket protocol.</p>
+      </div>
+
+      {/* Type cards */}
+      <div className="grid grid-cols-2 gap-4">
+        {AGENT_TYPES.map(({ value, label, tagline, icon: Icon, accent, what, earn }) => {
+          const active = form.agent_type === value
+          const isV    = accent === 'violet'
+          return (
+            <button key={value}
+              onClick={() => setFields({ agent_type: value, ...ECONOMICS_BY_TYPE[value] })}
+              className={`relative p-5 rounded-2xl border-2 text-left transition-all ${
+                active
+                  ? isV ? 'border-violet-400 bg-violet-50 shadow-md' : 'border-indigo-400 bg-indigo-50 shadow-md'
+                  : 'border-am-border bg-white hover:border-am-muted/50 hover:shadow-sm'
+              }`}>
+              {active && (
+                <span className={`absolute top-3 right-3 w-5 h-5 rounded-full flex items-center justify-center ${isV ? 'bg-violet-500' : 'bg-indigo-500'}`}>
+                  <Check size={10} className="text-white" strokeWidth={3} />
+                </span>
+              )}
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 border ${
+                active
+                  ? isV ? 'bg-violet-100 border-violet-200' : 'bg-indigo-100 border-indigo-200'
+                  : 'bg-am-surface border-am-border'
+              }`}>
+                <Icon size={18} className={active ? (isV ? 'text-violet-600' : 'text-indigo-600') : 'text-am-muted'} />
+              </div>
+              <div className="font-bold text-am-text text-sm mb-0.5">{label}</div>
+              <div className="text-xs text-am-muted mb-3 leading-relaxed">{tagline}</div>
+              <div className="space-y-1.5 mb-4">
+                {what.map((line, i) => (
+                  <div key={i} className="flex items-start gap-1.5 text-xs text-am-text-2">
+                    <span className={`mt-0.5 flex-shrink-0 font-bold ${active ? (isV ? 'text-violet-400' : 'text-indigo-400') : 'text-am-muted'}`}>›</span>
+                    {line}
+                  </div>
+                ))}
+              </div>
+              <div className={`text-xs font-semibold px-2.5 py-1 rounded-lg inline-block ${
+                active
+                  ? isV ? 'bg-violet-100 text-violet-700' : 'bg-indigo-100 text-indigo-700'
+                  : 'bg-am-surface text-am-muted border border-am-border'
+              }`}>
+                {earn}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Obligations for selected type */}
+      {selected && (
+        <div className={`rounded-2xl border p-5 ${isJudge ? 'border-violet-200 bg-violet-50/60' : 'border-indigo-100 bg-indigo-50/50'}`}>
+          <div className={`text-xs font-bold uppercase tracking-wider mb-4 ${isJudge ? 'text-violet-700' : 'text-indigo-700'}`}>
+            Your obligations as a {isJudge ? 'Judge' : 'Provider'}
+          </div>
+          <div className="grid grid-cols-1 gap-3">
+            {selected.obligations.map(({ icon: Icon, title, desc }, i) => (
+              <div key={i} className="flex items-start gap-3">
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 border ${
+                  isJudge ? 'bg-violet-100 border-violet-200' : 'bg-indigo-100 border-indigo-200'
+                }`}>
+                  <Icon size={13} className={isJudge ? 'text-violet-600' : 'text-indigo-600'} />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-am-text">{title}</div>
+                  <div className="text-xs text-am-muted mt-0.5 leading-relaxed">{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Acceptance checkbox */}
+      <div className={`rounded-xl border p-4 ${acceptedError ? 'border-rose-300 bg-rose-50' : 'border-am-border bg-am-surface'}`}>
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input type="checkbox" checked={accepted} onChange={e => setAccepted(e.target.checked)}
+            className="mt-0.5 w-4 h-4 rounded border-am-border accent-indigo-600 cursor-pointer" />
+          <span className="text-sm text-am-text leading-snug">
+            I understand my role as a <span className="font-semibold">{isJudge ? 'Judge' : 'Provider'}</span> and
+            commit to the obligations listed above for the lifetime of this registration.
+          </span>
+        </label>
+        {acceptedError && (
+          <p className="text-xs text-am-rose mt-2 flex items-center gap-1 ml-7">
+            <AlertCircle size={11} /> {acceptedError}
+          </p>
+        )}
+      </div>
     </div>
   )
 }

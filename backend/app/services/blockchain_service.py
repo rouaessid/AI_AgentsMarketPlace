@@ -16,6 +16,7 @@ settings = get_settings()
 
 # ── Minimal ABIs ──────────────────────────────────────────────────────────────
 
+
 _IDENTITY_ABI = [
     {
         "inputs": [
@@ -65,6 +66,25 @@ _IDENTITY_ABI = [
         ],
         "name": "AgentVersionMinted",
         "type": "event",
+    },
+]
+
+_REPUTATION_ABI = [
+    {
+        "inputs": [
+            {"internalType": "uint256", "name": "agentId",       "type": "uint256"},
+            {"internalType": "int128",  "name": "value",          "type": "int128"},
+            {"internalType": "uint8",   "name": "valueDecimals",  "type": "uint8"},
+            {"internalType": "string",  "name": "tag1",           "type": "string"},
+            {"internalType": "string",  "name": "tag2",           "type": "string"},
+            {"internalType": "string",  "name": "endpoint",       "type": "string"},
+            {"internalType": "string",  "name": "feedbackURI",    "type": "string"},
+            {"internalType": "bytes32", "name": "feedbackHash",   "type": "bytes32"},
+        ],
+        "name": "giveFeedback",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
     },
 ]
 
@@ -293,4 +313,140 @@ class BlockchainService:
 
         except Exception as exc:
             logger.error("stake failed: %s", exc)
+            return ""
+
+    # ── ReputationRegistry.giveFeedback() ───────────────────────────────────
+
+    def give_feedback(
+        self,
+        token_id:       int,
+        value:          int,
+        value_decimals: int,
+        tag1:           str,
+        tag2:           str = "",
+    ) -> str:
+        """
+        Call ReputationRegistry.giveFeedback(tokenId, value, valueDecimals, tag1, tag2, ...).
+
+        Uses FEEDBACK_WALLET_KEY — NOT the platform/deployer key.
+        The deployer owns all agent NFTs and would trigger AgentOwnerCannotRate.
+        Returns tx_hash_hex, or "" on failure.
+        """
+        addr = settings.reputation_registry_address
+        if not addr:
+            logger.warning("REPUTATION_REGISTRY_ADDRESS not set — skipping giveFeedback")
+            return ""
+        if not self.is_available():
+            return ""
+
+        key = settings.feedback_wallet_key or settings.platform_private_key
+        if not key:
+            logger.warning("No feedback_wallet_key configured")
+            return ""
+
+        try:
+            from eth_account import Account as _Account
+            account = _Account.from_key(key)
+            contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(addr),
+                abi=_REPUTATION_ABI,
+            )
+            tx = contract.functions.giveFeedback(
+                token_id, value, value_decimals, tag1, tag2, "", "", b"\x00" * 32
+            ).build_transaction({
+                "from":     account.address,
+                "chainId":  self.w3.eth.chain_id,
+                "nonce":    self.w3.eth.get_transaction_count(account.address, "pending"),
+                "gasPrice": self.w3.eth.gas_price,
+            })
+            try:
+                tx["gas"] = int(self.w3.eth.estimate_gas(tx) * 1.3)
+            except Exception:
+                tx["gas"] = 200_000
+
+            signed  = self.w3.eth.account.sign_transaction(tx, private_key=key)
+            tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
+            if receipt.status != 1:
+                raise RuntimeError(f"giveFeedback() reverted: {tx_hash.hex()}")
+
+            logger.info(
+                "ReputationRegistry.giveFeedback(token=%d, tag1=%s, value=%d) tx=%s",
+                token_id, tag1, value, tx_hash.hex()[:20],
+            )
+            return tx_hash.hex()
+
+        except Exception as exc:
+            logger.error("give_feedback failed: %s", exc)
+            return ""
+
+    def record_pipeline_scores(
+        self,
+        task_id:   str,
+        agent_ids: list[str],
+        scores:    list[float],
+    ) -> str:
+        """
+        Appelle ValidationRegistry.recordPipelineScores() pour émettre
+        ScoreRecorded(mode=1) pour chaque agent participant d'un pipeline.
+
+        Déclenche l'indexeur → collaboration_log → eigentrust_sync.
+        Retourne tx_hash_hex ou "" en cas d'échec.
+        """
+        addr = settings.validation_registry_address
+        if not addr:
+            logger.warning("VALIDATION_REGISTRY_ADDRESS not set — skip recordPipelineScores")
+            return ""
+        if not self.is_available():
+            return ""
+        if not agent_ids or not scores or len(agent_ids) != len(scores):
+            logger.warning("record_pipeline_scores: agent_ids/scores invalides")
+            return ""
+
+        _abi = [
+            {
+                "inputs": [
+                    {"name": "agentIds_", "type": "string[]"},
+                    {"name": "taskId_",   "type": "string"},
+                    {"name": "scores_",   "type": "uint8[]"},
+                ],
+                "name": "recordPipelineScores",
+                "outputs": [],
+                "stateMutability": "nonpayable",
+                "type": "function",
+            }
+        ]
+
+        try:
+            account  = self._account()
+            uint8_scores = [max(0, min(100, int(round(s)))) for s in scores]
+            contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(addr),
+                abi=_abi,
+            )
+            tx = contract.functions.recordPipelineScores(
+                agent_ids, task_id, uint8_scores
+            ).build_transaction({
+                "from":     account.address,
+                "chainId":  self.w3.eth.chain_id,
+                "nonce":    self.w3.eth.get_transaction_count(account.address, "pending"),
+                "gasPrice": self.w3.eth.gas_price,
+            })
+            try:
+                tx["gas"] = int(self.w3.eth.estimate_gas(tx) * 1.3)
+            except Exception:
+                tx["gas"] = 200_000
+
+            signed  = self.w3.eth.account.sign_transaction(tx, private_key=settings.platform_private_key)
+            tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+            self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
+
+            logger.info(
+                "recordPipelineScores: task=%s agents=%s tx=%s",
+                task_id, agent_ids, tx_hash.hex()[:20],
+            )
+            return tx_hash.hex()
+
+        except Exception as exc:
+            logger.error("record_pipeline_scores failed: %s", exc)
             return ""

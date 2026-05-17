@@ -6,7 +6,7 @@ import {
   Copy, Check, Terminal, Code2, BookOpen, Activity, Play,
   Package, Cpu, Layers, Globe, Hash, AlertCircle, Lock,
   ShoppingCart, Loader2, XCircle, FileText, List, BarChart2,
-  ExternalLink, ChevronDown, ChevronUp,
+  ExternalLink, ChevronDown, ChevronUp, Star,
 } from 'lucide-react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import ReactMarkdown from 'react-markdown'
@@ -65,6 +65,7 @@ export default function AgentDetail() {
   // ── Run result — kept at parent level so it survives tab switches ─────────
   const [runResult,  setRunResult]  = useState(null)
   const [runError,   setRunError]   = useState(null)
+  const [reputation, setReputation] = useState(null)
 
   const pollingRef    = useRef(null)
   const metricsRef    = useRef(null)
@@ -89,6 +90,11 @@ export default function AgentDetail() {
     }
   }, [agentId])
 
+  const fetchReputation = useCallback(async () => {
+    const data = await agentApi.getReputation(agentId)
+    if (data) setReputation(data)
+  }, [agentId])
+
   // ── Check access ──────────────────────────────────────────────────────────
   const checkAccess = useCallback(async (wallet) => {
     if (!wallet) return
@@ -109,6 +115,7 @@ export default function AgentDetail() {
         clearInterval(pollingRef.current)
         pollingRef.current = null
         fetchAgent()
+        fetchReputation()
       }
     } catch {}
   }, [agentId, fetchAgent])
@@ -129,7 +136,8 @@ export default function AgentDetail() {
     return () => { clearInterval(pollingRef.current); pollingRef.current = null }
   }, [hasAccess, valStatus?.status, fetchValidation])
 
-  useEffect(() => { fetchAgent() }, [fetchAgent])
+  useEffect(() => { fetchAgent() },          [fetchAgent])
+  useEffect(() => { fetchReputation() },     [fetchReputation])
   useEffect(() => { checkAccess(walletAddress) }, [walletAddress, checkAccess])
   useEffect(() => { setRunResult(null); setRunError(null) }, [agentId])
 
@@ -390,7 +398,7 @@ export default function AgentDetail() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            {tab === 'overview'  && <OverviewTab agent={agent} monthlyData={monthlyData} weeklyData={weeklyData} accent={accent} hasMonthlyMetrics={hasMonthlyMetrics} hasWeeklyMetrics={hasWeeklyMetrics} />}
+            {tab === 'overview'  && <OverviewTab agent={agent} monthlyData={monthlyData} weeklyData={weeklyData} accent={accent} hasMonthlyMetrics={hasMonthlyMetrics} hasWeeklyMetrics={hasWeeklyMetrics} agentId={agentId} reputation={reputation} onReputationRefresh={fetchReputation} valStatus={valStatus} />}
             {tab === 'readme'    && <ReadmeTab agent={agent} />}
             {tab === 'integrate' && hasAccess && <IntegrateTab agent={agent} />}
             {tab === 'test'      && hasAccess && <TestTab agent={agent} buyerWallet={walletAddress} onValidationStarted={fetchValidation} onRunComplete={fetchAgent} result={runResult} error={runError} onResult={setRunResult} onError={setRunError} />}
@@ -540,7 +548,7 @@ function JudgeCard({ judge }) {
 
 // ── Tab components (identical to before, no changes needed) ──────────────────
 
-function OverviewTab({ agent, monthlyData, weeklyData, accent, hasMonthlyMetrics, hasWeeklyMetrics }) {
+function OverviewTab({ agent, monthlyData, weeklyData, accent, hasMonthlyMetrics, hasWeeklyMetrics, agentId, reputation, onReputationRefresh, valStatus }) {
   const m = agent.metrics || {}
   const technicalItems = [
     { label: 'LLM Model',    value: agent.llm_model,    icon: Cpu     },
@@ -624,6 +632,142 @@ function OverviewTab({ agent, monthlyData, weeklyData, accent, hasMonthlyMetrics
           ))}
         </div>
       </div>
+      <ReputationSection reputation={reputation} accent={accent} />
+      <RatingForm agentId={agentId} onSubmit={onReputationRefresh} accent={accent} validated={valStatus?.status === 'validated' || valStatus?.status === 'rejected'} />
+    </div>
+  )
+}
+
+// ── ReputationSection ─────────────────────────────────────────────────────────
+
+function ReputationSection({ reputation, accent }) {
+  if (!reputation) return null
+  const et  = reputation.eigentrust
+  const raw = reputation.raw_signals || {}
+
+  const scoreItems = et ? [
+    { label: 'Final Score',   value: et.final_score   != null ? (et.final_score   * 100).toFixed(1) + '%' : '--', color: accent    },
+    { label: 'Global Trust',  value: et.global_trust  != null ? (et.global_trust  * 100).toFixed(1) + '%' : '--', color: '#10b981' },
+    { label: 'Pre-Trust',     value: et.pre_trust     != null ? (et.pre_trust     * 100).toFixed(1) + '%' : '--', color: '#8b5cf6' },
+    { label: 'User Feedback', value: et.user_feedback != null ? (et.user_feedback * 100).toFixed(1) + '%' : '--', color: '#f59e0b' },
+  ] : []
+
+  return (
+    <div className="card shadow-card-md p-5">
+      <h3 className="text-sm font-semibold text-am-text mb-4 flex items-center gap-2">
+        <TrendingUp size={14} style={{ color: accent }} /> EigenTrust Reputation
+      </h3>
+      {et ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {scoreItems.map(({ label, value, color }) => (
+              <div key={label} className="rounded-xl p-3 text-center border" style={{ background: `${color}08`, borderColor: `${color}20` }}>
+                <div className="text-base font-bold text-am-text">{value}</div>
+                <div className="text-xs text-am-muted mt-1">{label}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-am-muted">
+            Réseau : {et.agents_in_network ?? 1} agent(s) · Convergé : {et.converged ? 'Oui' : 'Non'} · Itérations : {et.iterations}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {Object.keys(raw).length > 0 ? (
+            Object.entries(raw).map(([tag, data]) => (
+              <div key={tag} className="flex justify-between text-sm">
+                <span className="text-am-muted capitalize">{tag}</span>
+                <span className="font-mono text-xs text-am-text">{data.count} signal(s) · moy {data.average?.toFixed(1)}</span>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-am-muted">Aucun signal de réputation pour l'instant. Simulez une validation ou soumettez un avis.</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── RatingForm ────────────────────────────────────────────────────────────────
+
+function RatingForm({ agentId, onSubmit, accent, validated }) {
+  const [stars,   setStars]   = useState(0)
+  const [hover,   setHover]   = useState(0)
+  const [comment, setComment] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [result,  setResult]  = useState(null)
+  const [error,   setError]   = useState('')
+
+  async function handleSubmit() {
+    if (!stars) return
+    setLoading(true); setError(''); setResult(null)
+    try {
+      const res = await agentApi.submitFeedback(agentId, stars, comment)
+      setResult({ stars, tx: res.tx_hash })
+      setStars(0); setComment('')
+      onSubmit?.()
+    } catch (e) { setError(e.message) }
+    finally { setLoading(false) }
+  }
+
+  return (
+    <div className="card shadow-card-md p-5">
+      <h3 className="text-sm font-semibold text-am-text mb-4 flex items-center gap-2">
+        <Star size={14} style={{ color: accent }} /> Noter cet agent
+      </h3>
+
+      {result && (
+        <div className="rounded-lg p-3 bg-emerald-50 border border-emerald-200 text-xs text-emerald-700 mb-4 flex items-center gap-2">
+          <CheckCircle size={12} />
+          Avis soumis ({result.stars}★) · tx: <span className="font-mono">{result.tx?.slice(0, 18)}…</span>
+        </div>
+      )}
+      {error && (
+        <div className="rounded-lg p-3 bg-rose-50 border border-rose-200 text-xs text-rose-600 mb-4 flex items-center gap-2">
+          <AlertCircle size={12} /> {error}
+        </div>
+      )}
+
+      {validated ? (
+        <>
+          <div className="flex items-center gap-1 mb-4">
+            {[1,2,3,4,5].map((s) => (
+              <button
+                key={s}
+                onClick={() => setStars(s)}
+                onMouseEnter={() => setHover(s)}
+                onMouseLeave={() => setHover(0)}
+                className="text-2xl transition-transform hover:scale-110 focus:outline-none"
+                aria-label={`${s} étoile${s > 1 ? 's' : ''}`}
+              >
+                <span style={{ color: s <= (hover || stars) ? '#f59e0b' : '#cbd5e1' }}>★</span>
+              </button>
+            ))}
+            {stars > 0 && <span className="text-sm text-am-muted ml-2">{stars}/5</span>}
+          </div>
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Commentaire optionnel…"
+            className="w-full text-sm border border-am-border rounded-lg px-3 py-2 mb-3 resize-none bg-am-surface text-am-text focus:outline-none focus:border-am-indigo"
+            rows={2}
+            maxLength={200}
+          />
+          <button
+            onClick={handleSubmit}
+            disabled={!stars || loading}
+            className="btn-primary text-sm py-2 px-4 flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {loading ? <Loader2 size={12} className="animate-spin" /> : <Star size={12} />}
+            Soumettre avis
+          </button>
+        </>
+      ) : (
+        <p className="text-sm text-am-muted">
+          Disponible après le verdict des juges.
+        </p>
+      )}
     </div>
   )
 }
@@ -925,6 +1069,15 @@ function isResearchReport(output) {
   )
 }
 
+function isWriterContent(output) {
+  return (
+    output &&
+    typeof output === 'object' &&
+    typeof output.title === 'string' &&
+    typeof output.content === 'string'
+  )
+}
+
 function AgentOutputRenderer({ output, hasError }) {
   const [showRaw, setShowRaw] = useState(false)
 
@@ -941,6 +1094,45 @@ function AgentOutputRenderer({ output, hasError }) {
       <pre className="bg-slate-900 text-slate-200 rounded-xl p-4 font-mono text-sm overflow-x-auto max-h-96 whitespace-pre-wrap">
         {output}
       </pre>
+    )
+  }
+
+  if (isWriterContent(output)) {
+    const formatColors = {
+      report: { bg: '#eef2ff', color: '#6366f1', border: '#c7d2fe' },
+      article: { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+      summary: { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' },
+      documentation: { bg: '#fdf4ff', color: '#9333ea', border: '#e9d5ff' },
+    }
+    const fmt = formatColors[output.format] || formatColors.report
+    return (
+      <div className="space-y-3">
+        <div className="rounded-xl p-4" style={{ background: fmt.bg, border: `1px solid ${fmt.border}` }}>
+          <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: fmt.color }}>
+              {output.format || 'content'}
+            </span>
+            {output.word_count && (
+              <span className="text-xs font-mono" style={{ color: fmt.color }}>{output.word_count} words</span>
+            )}
+          </div>
+          <h3 className="font-bold text-am-text text-base leading-snug">{output.title}</h3>
+        </div>
+
+        {Array.isArray(output.sections) && output.sections.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-1">
+            {output.sections.map((s, i) => (
+              <span key={i} className="text-xs px-2.5 py-1 rounded-full border border-am-border bg-am-surface text-am-text-2">
+                {s}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="rounded-xl p-4 bg-white border border-am-border">
+          <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{output.content}</p>
+        </div>
+      </div>
     )
   }
 

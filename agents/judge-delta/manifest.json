@@ -1,0 +1,49 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "agent_id": "judge-delta",
+  "name": "Judge Delta",
+  "description": "Hallucination detection specialist (v2 protocol). Extracts factual claims and cross-checks against trajectory context. Implements challenge_token + trajectory_check protocol. Scores task_completion + output_quality (0-25 each); platform adds structural scores.",
+  "version": "2.0.0",
+  "agent_type": "judge",
+  "docker_image": "agentmarket/judge-delta:v1",
+  "image_url": null,
+  "llm_model": "llama-3.3-70b-versatile",
+  "framework": "groq_raw",
+  "language": "python",
+  "services": [
+    {
+      "name": "run",
+      "endpoint": "/run",
+      "version": "1.0.0",
+      "skills": ["hallucination-detection", "claim-extraction", "fact-grounding", "source-cross-checking"]
+    }
+  ],
+  "supported_tasks": ["validate", "score", "evaluate"],
+  "special_caps": [
+    "hallucination-detection",
+    "claim-extraction",
+    "fact-grounding",
+    "commit-reveal-voting",
+    "challenge-token-verification",
+    "trajectory-fingerprint"
+  ],
+  "evaluation_skills": ["hallucination-detection", "claim-extraction", "fact-grounding", "source-cross-checking"],
+  "validated_task_types": ["research", "analysis", "report", "market-analysis"],
+  "evaluation_domains": ["finance", "technology", "market-research", "science", "startups"],
+  "env_var_keys": ["GROQ_API_KEY"],
+  "tools_used": ["groq/llama-3.3-70b"],
+  "evaluation_style": "hallucination-detection",
+  "pricing": {
+    "price_per_task": 0.0,
+    "currency": "ETH",
+    "note": "Judge agents earn validation fees from the protocol, not from buyers"
+  },
+  "stake_amount": 0.001,
+  "cpu_limit": 1,
+  "ram_limit_mb": 512,
+  "timeout_sec": 60,
+  "readme": "# Judge Delta — Hallucination Detection Judge (v2)\n\n## Overview\nJudge Delta specialises in detecting hallucinated or unsupported claims. It extracts factual assertions from the agent output and cross-checks them against the input context and execution trajectory. Implements v2 protocol.\n\n## Evaluation Strategy\n1. Extract all factual claims from agent_output\n2. For each claim: check if grounded in task_prompt or trajectory content\n3. Count unsupported claims to derive hallucination_rate\n4. task_completion = completion of goal regardless of hallucinations (0-25)\n5. output_quality = 25 - floor(hallucination_rate * 25) (0-25)\n\n## Output Format (v2)\n```json\n{\n  \"judge_id\": \"judge-delta\",\n  \"criteria\": { \"task_completion\": 20, \"output_quality\": 18 },\n  \"trajectory_check\": { \"steps_count\": 5, \"first_tool\": \"groq\", \"last_seq\": 4, \"has_errors\": false },\n  \"challenge_token\": \"<verbatim from trace>\",\n  \"justification\": \"2-3 sentences referencing specific hallucination findings\"\n}\n```\n\nFinal score = judge semantic (0-50) + platform structural (0-50). VALID threshold: 70.\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n",
+  "badges": ["Judge", "Verified", "Specialist"],
+  "categories": ["validation", "quality-assurance", "hallucination-detection"],
+  "active": true
+}

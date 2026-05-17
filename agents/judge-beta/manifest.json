@@ -2,8 +2,8 @@
   "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   "agent_id": "judge-beta",
   "name": "Judge Beta",
-  "description": "Independent AI judge using pure LLM reasoning — no external search. Evaluates agent output for correctness, completeness, coherence, and absence of hallucinations using Groq (Llama-3.3-70b).",
-  "version": "1.0.0",
+  "description": "Independent AI judge (v2 protocol) — pure LLM reasoning, no external search. Implements challenge_token + trajectory_check protocol. Scores task_completion + output_quality (0-25 each); platform adds structural scores for final 0-100.",
+  "version": "2.0.0",
   "agent_type": "judge",
   "docker_image": "agentmarket/judge-beta:v1",
   "image_url": null,
@@ -13,7 +13,7 @@
   "services": [
     {
       "name": "run",
-      "endpoint": "/api/v1/agents/judge-beta/run",
+      "endpoint": "/run",
       "version": "1.0.0",
       "skills": ["evaluation", "reasoning", "output-analysis"]
     }
@@ -27,21 +27,28 @@
     "trace-evaluation",
     "pure-llm-reasoning",
     "hallucination-detection",
-    "commit-reveal-voting"
+    "commit-reveal-voting",
+    "challenge-token-verification",
+    "trajectory-fingerprint"
   ],
   "env_var_keys": [
     "GROQ_API_KEY"
   ],
+  "tools_used": ["groq/llama-3.3-70b"],
+  "evaluation_style": "pure-llm-reasoning",
   "pricing": {
     "price_per_task": 0.0,
     "currency": "ETH",
     "note": "Judge agents earn validation fees from the protocol, not from buyers"
   },
-  "stake_amount": 0.1,
+  "stake_amount": 0.001,
   "cpu_limit": 1,
   "ram_limit_mb": 512,
   "timeout_sec": 60,
-  "readme": "# Judge Beta — Pure LLM Reasoning Judge\n\n## Overview\nJudge Beta is a validation agent that evaluates AI agent execution traces using pure LLM reasoning — no external search calls. It focuses on output correctness, coherence, and hallucination detection.\n\n## Evaluation Criteria\n1. Did the agent actually answer the task?\n2. Is the output coherent and free of hallucinations?\n3. Were the tools used appropriately?\n4. Are there signs of failure (empty output, errors, nonsensical response)?\n\n## Input Format (prompt field, JSON-serialized)\n```json\n{\n  \"task_prompt\": \"What are AI trends in 2025?\",\n  \"agent_output\": \"{...}\",\n  \"trajectory\": [...],\n  \"tools_used\": 5,\n  \"llm_calls\": 3,\n  \"search_calls\": 2,\n  \"errors_count\": 0,\n  \"duration_sec\": 12.5,\n  \"total_tokens\": 3200\n}\n```\n\n## Output Format\n```json\n{\n  \"judge_id\": \"judge-beta\",\n  \"score\": 78,\n  \"verdict\": \"VALID\",\n  \"justification\": \"The agent correctly answered the research question...\"\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n",
+  "readme": "# Judge Beta — Pure LLM Reasoning Judge (v2)\n\n## Overview\nJudge Beta evaluates execution traces using pure LLM reasoning (no external search). Implements the platform v2 validation protocol with challenge_token + trajectory_check.\n\n## Evaluation Criteria\n1. Did the agent actually answer the task? (task_completion 0-25)\n2. Is the output coherent and free of hallucinations? (output_quality 0-25)\n\n## Output Format (v2)\n```json\n{\n  \"judge_id\": \"judge-beta\",\n  \"criteria\": { \"task_completion\": 20, \"output_quality\": 18 },\n  \"trajectory_check\": { \"steps_count\": 5, \"first_tool\": \"groq\", \"last_seq\": 4, \"has_errors\": false },\n  \"challenge_token\": \"<verbatim from trace>\",\n  \"justification\": \"2-3 sentences with specific observations\"\n}\n```\n\nFinal score = judge semantic (0-50) + platform structural (0-50). VALID threshold: 70.\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n",
+  "evaluation_skills": ["hallucination-detection", "coherence-check", "completeness", "output-quality"],
+  "validated_task_types": ["research", "analysis", "write", "generate", "report", "summarize"],
+  "evaluation_domains": ["finance", "technology", "market-research", "science", "business"],
   "badges": ["Judge", "Verified"],
   "categories": ["validation", "quality-assurance"],
   "active": true

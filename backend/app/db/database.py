@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from sqlalchemy import Column, Float, Integer, MetaData, String, Text, create_engine
+from sqlalchemy import Column, Float, Integer, MetaData, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
@@ -77,7 +77,11 @@ class Agent(Base):
     agent_type       = Column(Integer, nullable=True, default=0)    # 0=Provider, 1=Judge
 
     # Raw JSON of the full AgentRegistrationFile (identity only, no metrics)
-    identity_metadata = Column(Text,   nullable=True)
+    identity_metadata    = Column(Text, nullable=True)
+
+    # Embedding vecteur BAAI/bge-m3 calculé par le backend depuis identity_metadata
+    # JSON float[] — pré-calculé à l'enregistrement pour le matching sémantique
+    capability_embedding = Column(Text, nullable=True)
 
 
 class AgentVersion(Base):
@@ -185,6 +189,25 @@ class ValidationEvent(Base):
     created_at   = Column(String,  nullable=True)
 
 
+class CollaborationLog(Base):
+    """
+    One row per ScoreRecorded on-chain event (ValidationRegistry).
+    Cache only — rebuildable from ScoreRecorded events at any time.
+    Written ONLY by blockchain_indexer.py.
+    mode : 0 = solo task, 1 = pipeline task
+    """
+    __tablename__ = "collaboration_log"
+
+    id           = Column(String,  primary_key=True)   # tx_hash-log_index
+    agent_id     = Column(String,  nullable=False, index=True)
+    task_id      = Column(String,  nullable=False)
+    score        = Column(Float,   nullable=False)      # 0-100 aggregated judge score
+    mode         = Column(Integer, nullable=False)      # 0=solo, 1=pipeline
+    tx_hash      = Column(String,  nullable=True)
+    block_number = Column(Integer, nullable=True)
+    created_at   = Column(String,  nullable=True)
+
+
 class ReputationEvent(Base):
     """
     One row per ReputationRegistry NewFeedback / FeedbackRevoked event.
@@ -276,12 +299,86 @@ class JudgeVerdict(Base):
     created_at    = Column(String,  nullable=False)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  OPERATIONAL ZONE — written by backend runtime (pipeline orchestration)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PipelineTask(Base):
+    """
+    Tracks the full lifecycle of a planner-orchestrated task (solo or pipeline).
+    Off-chain operational state — not a mirror of on-chain events.
+    Final scores are always committed on-chain via ScoreRecorded after completion.
+    """
+    __tablename__ = "pipeline_tasks"
+
+    id                   = Column(String,  primary_key=True)        # UUID
+    task_prompt          = Column(Text,    nullable=False)           # raw user request
+    mode                 = Column(String,  nullable=False)           # "solo" | "pipeline"
+    plan_json            = Column(Text,    nullable=True)            # JSON TaskPlan (DAG)
+    selected_agents_json = Column(Text,    nullable=True)            # JSON list[AgentMatch]
+    steps_json           = Column(Text,    nullable=True)            # JSON list[PipelineStep]
+    status               = Column(String,  nullable=False, default="planning")
+    # planning → executing → validating → done | failed
+    final_output         = Column(Text,    nullable=True)            # assembled final output
+    val_task_id          = Column(String,  nullable=True)            # → validation_sessions
+    buyer_wallet         = Column(String,  nullable=True)
+    created_at           = Column(String,  nullable=False)
+    finished_at          = Column(String,  nullable=True)
+    # Pack access (same model as solo-agent AccessGrant)
+    pack_id              = Column(String,  nullable=True)   # original pack_id from proposals
+    pack_name            = Column(String,  nullable=True)   # display name
+    access_granted_at    = Column(String,  nullable=True)   # ISO datetime
+    access_expires_at    = Column(String,  nullable=True)   # ISO datetime (granted + 30d)
+    tx_hash              = Column(String,  nullable=True)   # MetaMask tx hash
+
+
+class JudgeReputation(Base):
+    """
+    Taux d'accord de chaque juge avec le consensus — mis à jour après chaque validation.
+    agreement_rate = agreement_count / total_validations  ∈ [0, 1]
+    Valeur initiale 0.5 (neutre) jusqu'à la première validation.
+    Mirrored on-chain via ReputationRegistry (tag1="judgeAccuracy").
+    """
+    __tablename__ = "judge_reputation"
+
+    judge_id          = Column(String,  primary_key=True)
+    total_validations = Column(Integer, nullable=False, default=0)
+    agreement_count   = Column(Integer, nullable=False, default=0)
+    agreement_rate    = Column(Float,   nullable=False, default=0.5)
+    updated_at        = Column(String,  nullable=True)
+
+
 # ── Init ───────────────────────────────────────────────────────────────────────
+
+def _apply_migrations() -> None:
+    """Add columns/tables that create_all cannot handle (existing tables)."""
+    with _engine.connect() as conn:
+        existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))}
+        if "capability_embedding" not in existing_cols:
+            conn.execute(text("ALTER TABLE agents ADD COLUMN capability_embedding TEXT"))
+            conn.commit()
+            logger.info("Migration: added agents.capability_embedding")
+
+        # Pack access fields on pipeline_tasks
+        pt_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(pipeline_tasks)"))}
+        for col, typedef in [
+            ("pack_id",           "TEXT"),
+            ("pack_name",         "TEXT"),
+            ("access_granted_at", "TEXT"),
+            ("access_expires_at", "TEXT"),
+            ("tx_hash",           "TEXT"),
+        ]:
+            if col not in pt_cols:
+                conn.execute(text(f"ALTER TABLE pipeline_tasks ADD COLUMN {col} {typedef}"))
+                conn.commit()
+                logger.info("Migration: added pipeline_tasks.%s", col)
+
 
 def init_db() -> None:
     """Create all tables if they don't exist. Safe to call multiple times."""
     _db_path.parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(_engine)
+    _apply_migrations()
     logger.info("DB initialisee (SQLAlchemy): %s", _db_path)
 
 

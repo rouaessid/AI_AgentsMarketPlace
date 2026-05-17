@@ -144,6 +144,58 @@ def _docker_inspect_sync(image: str) -> str:
     return image_tag
 
 
+def _docker_start_service(cmd: list) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+_SENSITIVE_ENV_KEYS = {
+    "GROQ_API_KEY",
+    "TAVILY_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+}
+
+def _mask_cmd_for_log(cmd: list) -> str:
+    """Return a loggable version of a docker run command with secret values masked."""
+    out, i = [], 0
+    while i < len(cmd):
+        token = cmd[i]
+        if token == "-e" and i + 1 < len(cmd):
+            pair = cmd[i + 1]
+            key = pair.split("=", 1)[0]
+            if key in _SENSITIVE_ENV_KEYS:
+                out.append("-e")
+                out.append(f"{key}=***")
+                i += 2
+                continue
+        out.append(token)
+        i += 1
+    return " ".join(out)
+
+
+def _docker_inspect_status(container_name: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["docker", "inspect", "--format={{.State.Status}}", container_name],
+        capture_output=True, text=True,
+    )
+
+
+def _docker_logs(container_name: str, tail: int = 0) -> subprocess.CompletedProcess:
+    cmd = ["docker", "logs"]
+    if tail:
+        cmd += ["--tail", str(tail)]
+    cmd.append(container_name)
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def _docker_stop(container_name: str) -> None:
+    subprocess.run(["docker", "stop", "--time", "5", container_name], capture_output=True)
+
+
+def _docker_rm(container_name: str) -> None:
+    subprocess.run(["docker", "rm", container_name], capture_output=True)
+
+
 def _docker_run_sync(cmd, timeout):
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=timeout)
@@ -199,9 +251,11 @@ class SandboxService:
         timeout = sc.get("timeout_sec", 60)
         schema  = sc.get("manifest_schema", "default_v1")
 
-        # ── Docker image : toujours utiliser record.docker_image (mis à jour par /run) ──
-        # NE PAS utiliser sc.get("docker_image") — il peut être obsolète (sans sha256)
-        docker_image = record.docker_image or sc.get("docker_image") or "agentmarket/base:v1"
+        # Toujours re-résoudre le digest depuis Docker local pour gérer les rebuilds.
+        # Le digest stocké en DB peut être périmé si l'image a été reconstruite.
+        _stored = record.docker_image or sc.get("docker_image") or "agentmarket/base:v1"
+        _tag    = _stored.split("@")[0]   # strip ancien digest éventuel
+        docker_image = await self.resolve_image_digest(_tag)
 
         run_id     = str(uuid.uuid4())
         started_at = datetime.now(timezone.utc)
@@ -423,6 +477,7 @@ class SandboxService:
             "--user", "--security-opt", "--tmpfs",
             "65534:65534", "no-new-privileges", "/tmp:size=64m,noexec,nosuid",
             "--network", "none",
+            "--rm",  # service containers need manual cleanup so we can capture their logs
         ]
         image = base_cmd[-1]
         i = 0
@@ -440,71 +495,120 @@ class SandboxService:
         # Service containers use bridge so port-mapping and outbound HTTP work.
         cmd += ["--network", "bridge"] + filtered_options + ["-p", f"{port}:8000", image]
         
-        logger.info("[service] Starting container %s on port %d. Cmd: %s", container_name, port, " ".join(cmd))
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        
+        logger.info("[service] Starting container %s on port %d. Cmd: %s", container_name, port, _mask_cmd_for_log(cmd))
+        loop = asyncio.get_event_loop()
+        r = await loop.run_in_executor(None, _docker_start_service, cmd)
+
         if r.returncode != 0:
             logger.error("[service] Docker run failed (code %d): %s", r.returncode, r.stderr)
             return "", r.stderr, r.returncode, None
 
         stdout = ""; stderr = ""; exit_code = 0; response_json = None
-        
+
         try:
             # 1. Attendre que le serveur soit prêt (polling /health)
             url_root = f"http://localhost:{port}"
             async with httpx.AsyncClient(timeout=10) as client:
                 agent_ready = False
-                for i in range(30): # 30s max startup, 1s between retries
+                startup_error_msg = None
+
+                for i in range(60):  # 60s max startup, 1s between retries
+                    # Check if container is still running before trying /health
+                    inspect = await loop.run_in_executor(None, _docker_inspect_status, container_name)
+                    container_status = inspect.stdout.strip()
+                    if container_status not in ("running", ""):
+                        r_logs = await loop.run_in_executor(None, _docker_logs, container_name, 50)
+                        startup_error_msg = (
+                            f"Container exited early (status={container_status}). "
+                            f"Logs:\n{r_logs.stdout}{r_logs.stderr}"
+                        )
+                        logger.error("[service] %s", startup_error_msg)
+                        break
+
                     try:
                         resp = await client.get(f"{url_root}/health")
                         if resp.status_code == 200:
+                            # Seller may return {"status": "error"} with HTTP 200
+                            try:
+                                body = resp.json()
+                                if isinstance(body, dict) and body.get("status") == "error":
+                                    startup_error_msg = body.get("message", "Agent reported startup error")
+                                    logger.error("[service] Agent unhealthy: %s", startup_error_msg)
+                                    break
+                            except Exception:
+                                pass
                             logger.info("[service] Agent ready at %s after %ds", url_root, i + 1)
                             agent_ready = True
                             break
-                    except:
+                    except Exception:
                         pass
-                    await asyncio.sleep(1)  # wait 1s between each retry
+                    await asyncio.sleep(1)
 
                 if not agent_ready:
-                    r_logs = subprocess.run(["docker", "logs", "--tail", "30", container_name], capture_output=True, text=True)
-                    logger.error("[service] Healthcheck timeout after 30s. Last logs:\n%s", r_logs.stdout + r_logs.stderr)
-                
-                # 2. Envoyer la tâche
-                # On utilise l'endpoint défini dans les services
-                run_endpoint = "/run"
-                for s in services:
-                    if s.name == "run":
-                        run_endpoint = s.endpoint
-                        break
-                
-                logger.info("[service] Posting task to %s", run_endpoint)
-                payload = {
-                    "task_id": sandbox_input.task_id,
-                    "prompt": sandbox_input.task_prompt,
-                    "params": sandbox_input.task_params
-                }
-                
-                resp = await client.post(f"{url_root}{run_endpoint}", json=payload, timeout=timeout)
-                if resp.status_code == 200:
-                    response_json = resp.json()
-                    stdout = json.dumps(response_json)
-                    logger.info("[service] Task completed successfully")
-                else:
-                    stderr = f"Service returned error {resp.status_code}: {resp.text}"
+                    if not startup_error_msg:
+                        r_logs = await loop.run_in_executor(None, _docker_logs, container_name, 30)
+                        startup_error_msg = (
+                            f"Health check timeout after 30s. "
+                            f"Last logs:\n{r_logs.stdout}{r_logs.stderr}"
+                        )
+                    logger.error("[service] Startup failed: %s", startup_error_msg)
+                    stderr = startup_error_msg
                     exit_code = 1
-                    logger.warning("[service] Task failed: %s", stderr)
+                else:
+                    # 2. Envoyer la tâche seulement si le serveur est prêt
+                    run_endpoint = "/run"
+                    for s in services:
+                        if s.name == "run":
+                            run_endpoint = s.endpoint
+                            break
+
+                    payload = {
+                        "task_id": sandbox_input.task_id,
+                        "prompt": sandbox_input.task_prompt,
+                        "params": sandbox_input.task_params
+                    }
+
+                    logger.info("[service] Posting task to %s", run_endpoint)
+                    resp = await client.post(f"{url_root}{run_endpoint}", json=payload, timeout=timeout)
+                    if resp.status_code == 200:
+                        response_json = resp.json()
+                        stdout = json.dumps(response_json)
+                        logger.info("[service] Task completed successfully")
+                    else:
+                        stderr = f"Service returned error {resp.status_code}: {resp.text}"
+                        exit_code = 1
+                        logger.warning("[service] Task failed: %s", stderr)
 
         except Exception as e:
             logger.exception("[service] Error during service execution")
             stderr = str(e)
             exit_code = 1
         finally:
-            # Cleanup
+            # Shield each cleanup step so the executor thread runs to completion even
+            # when this task is being cancelled. Track cancellation and re-raise after
+            # all cleanup is done so asyncio's cooperative cancellation is respected.
             logger.info("[service] Stopping container %s", container_name)
-            subprocess.run(["docker", "stop", container_name], capture_output=True)
-            # Capturer les logs avant de supprimer
-            r = subprocess.run(["docker", "logs", container_name], capture_output=True, text=True)
-            stderr += "\n[CONTAINER LOGS]\n" + r.stdout + r.stderr
-            subprocess.run(["docker", "rm", container_name], capture_output=True)
-            
+            _was_cancelled = False
+            try:
+                await asyncio.shield(loop.run_in_executor(None, _docker_stop, container_name))
+            except asyncio.CancelledError:
+                _was_cancelled = True
+            except Exception:
+                pass
+            try:
+                r_logs = await asyncio.shield(loop.run_in_executor(None, _docker_logs, container_name, 0))
+                stderr += "\n[CONTAINER LOGS]\n" + r_logs.stdout + r_logs.stderr
+            except asyncio.CancelledError:
+                _was_cancelled = True
+            except Exception:
+                pass
+            try:
+                await asyncio.shield(loop.run_in_executor(None, _docker_rm, container_name))
+            except asyncio.CancelledError:
+                _was_cancelled = True
+            except Exception:
+                pass
+            if _was_cancelled:
+                raise asyncio.CancelledError()
+
         return stdout, stderr, exit_code, response_json

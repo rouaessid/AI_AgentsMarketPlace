@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import threading
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +18,8 @@ settings = get_settings()
 _ENDPOINTS_FILE = Path(settings.storage_path) / "endpoints.json"
 _tunnel_url: str | None = None
 _cf_process: Optional[subprocess.Popen] = None
+_watchdog_task: Optional[asyncio.Task] = None
+_watchdog_active: bool = False
 
 
 def _load_endpoints() -> dict[str, str]:
@@ -190,6 +193,73 @@ def get_ngrok_url() -> str | None:
 
 def get_all_endpoints() -> dict[str, str]:
     return _load_endpoints()
+
+
+def _ping_tunnel(url: str) -> bool:
+    """Return True if tunnel responds to /health within 8s."""
+    try:
+        with urllib.request.urlopen(f"{url}/health", timeout=8) as resp:
+            return resp.status < 500
+    except Exception:
+        return False
+
+
+async def _restart_tunnel() -> None:
+    global _tunnel_url, _cf_process
+    if _cf_process:
+        try:
+            _cf_process.terminate()
+        except Exception:
+            pass
+        _cf_process = None
+
+    new_url = await _start_cloudflare_tunnel()
+    if new_url:
+        _tunnel_url = new_url
+        _update_all_endpoints()
+        logger.info("Watchdog: tunnel redémarre → %s", _tunnel_url)
+    else:
+        logger.error("Watchdog: échec redémarrage du tunnel cloudflare")
+
+
+async def _watchdog_loop() -> None:
+    global _watchdog_active
+    logger.info("Watchdog tunnel actif — vérification toutes les 60s")
+    while _watchdog_active:
+        await asyncio.sleep(60)
+        if not _tunnel_url or not _tunnel_url.startswith("https://"):
+            continue
+        loop = asyncio.get_event_loop()
+        alive = await loop.run_in_executor(None, _ping_tunnel, _tunnel_url)
+        if alive:
+            logger.debug("Watchdog: tunnel OK (%s)", _tunnel_url)
+        else:
+            logger.warning(
+                "Watchdog: tunnel mort (%s) — redémarrage cloudflared…", _tunnel_url
+            )
+            await _restart_tunnel()
+
+
+async def start_watchdog() -> None:
+    global _watchdog_task, _watchdog_active
+    # Skip when a static URL is configured — nothing to restart
+    if settings.tunnel_base_url or settings.ngrok_base_url:
+        logger.info("Watchdog: URL statique configurée — watchdog désactivé")
+        return
+    _watchdog_active = True
+    _watchdog_task = asyncio.create_task(_watchdog_loop())
+
+
+async def stop_watchdog() -> None:
+    global _watchdog_active, _watchdog_task
+    _watchdog_active = False
+    if _watchdog_task:
+        _watchdog_task.cancel()
+        try:
+            await _watchdog_task
+        except asyncio.CancelledError:
+            pass
+        _watchdog_task = None
 
 
 async def stop_ngrok() -> None:

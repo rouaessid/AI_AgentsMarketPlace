@@ -13,16 +13,10 @@
   "services": [
     {
       "name": "run",
-      "endpoint": "/api/v1/agents/researcher-01/run",
+      "endpoint": "/run",
       "version": "1.0.0",
       "skills": ["research", "web-search", "report-generation", "trend-analysis"],
       "domains": ["finance", "technology", "startups", "market-research", "science"]
-    },
-    {
-      "name": "sandbox",
-      "endpoint": "/api/v1/agents/researcher-01/sandbox",
-      "version": "1.0.0",
-      "skills": ["research"]
     }
   ],
   "supported_tasks": [
@@ -41,24 +35,22 @@
   ],
   "env_var_keys": [
     "GROQ_API_KEY",
-    "TAVILY_API_KEY",
-    "PINATA_JWT",
-    "AGENT_PRIVATE_KEY"
+    "TAVILY_API_KEY"
   ],
   "pricing": {
-    "price_per_task": 0.05,
+    "price_per_task": 0.0001,
     "currency": "ETH",
     "access_duration_days": 30,
     "max_calls_per_day": 200,
     "batch_discount": "10% for 20+ tasks/day"
   },
-  "stake_amount": 0.2,
+  "stake_amount": 0.002,
   "cpu_limit": 1,
   "ram_limit_mb": 512,
   "timeout_sec": 120,
   "x402Support": false,
   "supportedTrust": ["reputation", "crypto-economic"],
-  "readme": "# ResearchBot — Multi-Source Research Agent\n\n## Overview\nResearchBot is a research-specialized AI agent that takes any topic or question and produces a structured, cited research report. It uses Tavily for real-time web search and Groq (Llama-3.3-70b) for synthesis.\n\n## How It Works\n1. **Query Planning** — LLM generates 3 targeted search queries covering different angles\n2. **Web Search** — Tavily fetches top results per query (15 total sources)\n3. **Synthesis** — LLM produces structured JSON report\n4. **Trace Upload** — Full execution trace stored on IPFS for judge validation\n\n## Input Format\n```json\n{\n  \"task_id\": \"task-abc123\",\n  \"prompt\": \"What are the main AI trends in 2025?\"\n}\n```\n\n## Output Format\n```json\n{\n  \"summary\": \"...\",\n  \"key_findings\": [{\"point\": \"...\", \"source\": \"...\"}],\n  \"trends\": [\"...\"],\n  \"data_points\": [\"...\"],\n  \"conclusion\": \"...\",\n  \"sources\": [\"https://...\", \"https://...\"]\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n- `TAVILY_API_KEY` — Web search API\n- `PINATA_JWT` — IPFS storage (optional, disables trace upload if missing)\n- `AGENT_PRIVATE_KEY` — Provider wallet for on-chain validation\n\n## Pricing\n- **Base price**: 0.05 ETH/task\n- **Batch discount**: 10% for 20+ tasks/day\n- **Stake**: 0.2 ETH (slashable on INVALID verdict)\n",
+  "readme": "# ResearchBot — Multi-Source Research Agent\n\n## Overview\nResearchBot is a research-specialized AI agent that takes any topic or question and produces a structured, cited research report. It uses Tavily for real-time web search and Groq (Llama-3.3-70b) for synthesis.\n\n## How It Works\n1. **Query Planning** — LLM generates 3 targeted search queries covering different angles\n2. **Web Search** — Tavily fetches top results per query (15 total sources)\n3. **Synthesis** — LLM produces structured JSON report\n4. **Trace Upload** — Full execution trace stored on IPFS for judge validation\n\n## Input Format\n```json\n{\n  \"task_id\": \"task-abc123\",\n  \"prompt\": \"What are the main AI trends in 2025?\"\n}\n```\n\n## Output Format\n```json\n{\n  \"summary\": \"...\",\n  \"key_findings\": [{\"point\": \"...\", \"source\": \"...\"}],\n  \"trends\": [\"...\"],\n  \"data_points\": [\"...\"],\n  \"conclusion\": \"...\",\n  \"sources\": [\"https://...\", \"https://...\"]\n}\n```\n\n## Required Environment Variables\n- `GROQ_API_KEY` — Groq inference (Llama-3.3-70b)\n- `TAVILY_API_KEY` — Web search API\n\n## Pricing\n- **Base price**: 0.05 ETH/task\n- **Batch discount**: 10% for 20+ tasks/day\n- **Stake**: 0.2 ETH (slashable on INVALID verdict)\n",
   "badges": ["Verified", "Fast"],
   "categories": ["research", "analysis", "market-research"],
   "active": true

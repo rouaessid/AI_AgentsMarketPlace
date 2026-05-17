@@ -41,6 +41,42 @@ _ESCROW_DEPOSIT_ABI = [{
     "type": "function",
 }]
 
+# ── Minimal IdentityRegistry ABI for on-chain price/status checks ─────────────
+_IDENTITY_REGISTRY_ABI = [
+    {
+        "inputs": [{"internalType": "string", "name": "agentId_", "type": "string"}],
+        "name": "isActive",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "string", "name": "agentId_", "type": "string"}],
+        "name": "getPricePerTask",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+# ── Minimal IdentityRegistry ABI — price + status ────────────────────────────
+_IDENTITY_REGISTRY_ABI = [
+    {
+        "inputs": [{"internalType": "string", "name": "agentId_", "type": "string"}],
+        "name": "getPricePerTask",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "string", "name": "agentId_", "type": "string"}],
+        "name": "isActive",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
 # ── Minimal ReputationRegistry ABI for giveFeedback ──────────────────────────
 _REPUTATION_GIVE_FEEDBACK_ABI = [{
     "inputs": [
@@ -289,7 +325,10 @@ async def run_agent_public(
         raise HTTPException(403, detail=f"Agent '{agent_id}' non actif")
 
     rf            = record.registration_file
-    required_keys = rf.sandbox_config.get("env_var_keys", []) if rf else []
+    _SENSITIVE    = ("PRIVATE_KEY", "SECRET_KEY", "WALLET_KEY", "MNEMONIC", "SEED_PHRASE")
+    all_keys      = rf.sandbox_config.get("env_var_keys", []) if rf else []
+    # Only require keys the buyer is expected to provide (same filter as frontend).
+    required_keys = [k for k in all_keys if not any(p in k.upper() for p in _SENSITIVE)]
     missing       = [k for k in required_keys if k not in body.params]
     if missing:
         raise HTTPException(400, detail=f"Cles API manquantes: {missing}. Requises: {required_keys}")
@@ -357,7 +396,7 @@ async def run_agent_public(
     )
 
     # ── Trigger validation if buyer has paid ─────────────────────────────────
-    if manifest.proxy_cid and body.buyer_wallet:
+    if manifest.status not in ("error", "failed") and manifest.proxy_cid and body.buyer_wallet:
         grant = access_repo.get_access_grant(agent_id, body.buyer_wallet)
         if grant:
             val_task_id = f"val-{manifest.run_id[:16]}"
@@ -365,7 +404,10 @@ async def run_agent_public(
                 agent_id, val_task_id=val_task_id, status="pending"
             )
             from app.services.judge_service import run_validation
-            bg.add_task(run_validation, agent_id, val_task_id, manifest.proxy_cid)
+            bg.add_task(
+                run_validation, agent_id, val_task_id, manifest.proxy_cid,
+                0, body.prompt,
+            )
             logger.info("Validation triggered for agent=%s cid=%s", agent_id, manifest.proxy_cid)
 
     return JSONResponse({
@@ -416,16 +458,32 @@ async def get_purchase_info(agent_id: str) -> PurchaseInfoResponse:
 
     task_id = f"task-{uuid.uuid4().hex[:16]}"
 
-    # Determine price in wei
+    # Fallback: DB price
     price_eth = record.price_per_task or 0.0
     price_wei = int(price_eth * 10**18)
 
-    # Build calldata for depositPayment(taskId_, agentId_)
     escrow_address = _settings.escrow_manager_address or ""
     call_data = "0x"
+
+    w3 = Web3(Web3.HTTPProvider(_settings.rpc_url))
+
+    # Read the real price from IdentityRegistry (set at registration time).
+    # This is the authoritative value that EscrowManager will enforce on-chain.
+    if _settings.identity_registry_address:
+        try:
+            ir = w3.eth.contract(
+                address=Web3.to_checksum_address(_settings.identity_registry_address),
+                abi=_IDENTITY_REGISTRY_ABI,
+            )
+            on_chain_wei: int = ir.functions.getPricePerTask(agent_id).call()
+            price_wei = on_chain_wei
+            price_eth = on_chain_wei / 10**18
+        except Exception as e:
+            logger.warning("Could not read on-chain price for %s (using DB fallback): %s", agent_id, e)
+
+    # Build calldata for depositPayment(taskId_, agentId_)
     if escrow_address:
         try:
-            w3 = Web3(Web3.HTTPProvider(_settings.rpc_url))
             escrow = w3.eth.contract(
                 address=Web3.to_checksum_address(escrow_address),
                 abi=_ESCROW_DEPOSIT_ABI,

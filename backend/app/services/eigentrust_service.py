@@ -1,185 +1,332 @@
 """
-eigentrust_service.py — OpenRank EigenTrust Engine.
+eigentrust_service.py — OpenRank EigenTrust Engine (Étape 2 complète).
 
-Architecture 4 phases (OpenRank) :
+FORMULES IMPLÉMENTÉES
+─────────────────────────────────────────────────────────────────────────────
+1. Seed Trust  p[i]                                      (Formule de base)
+   ─────────────────────────────────────────────────────
+   Scores juges = [judge_alpha, judge_beta, judge_gamma]   ∈ [0, 100]
 
-  Phase 1 — Ingestion
-    p[i]    = SuccessRate normalisé de l'agent i  (Judge → Agent, ancre technique)
-    C[i][j] = Score de collaboration Agent i → Agent j  (Agent → Agent, propagation)
+   p[i] = mean(judge_scores)     — juges UNIQUEMENT, indépendant de tout autre agent.
+   user_feedback n'entre PAS dans p. Il alimente f[i] (couche applicative séparée).
 
-  Phase 2 — Moteur (Power Method)
-    t^(k+1) = (1 - α) × Cᵀ × t^(k) + α × p
-    Convergence : ||t^(k+1) - t^k||₁ < ε
+   Normalisé avant Power Method : p̂ = p / sum(p)  (si sum>0, sinon uniforme)
 
-  Phase 3 — Global-Trust
-    t_i = score de réputation technique absolu
+   Source DB : tag1="successRate" dans reputation_events (écrit par indexeur).
+   Pour une tâche fraîche : task_p_overrides={agent_id: valeur_0_100} bypasse DB.
 
-  Phase 4 — Score Final (couche applicative)
-    score_final_i = t_i × user_feedback_normalized_i
-    (User → Agent = pondérateur contextuel, pas input EigenTrust)
+2. Collaboration Capacity  C[j][i]                        (ATE — Imbens 2021)
+   ─────────────────────────────────────────────────────
+   uplift[j] = max( mean(pipeline_scores[j]) − mean(solo_scores[j]), 0 ) / 100
 
-Références :
-  Kamvar et al., "The EigenTrust Algorithm for Reputation Management in P2P Networks",
-  Stanford / WWW 2003.
-  OpenRank Protocol — contextual trust scoring.
+   C[j][i] = uplift[j] / (N − 1)   pour i ≠ j     (crédit distribué équitable)
+   C[j][j] = 0                                      (pas d'auto-confiance)
+
+   Source DB : collaboration_log (mode=0 solo, mode=1 pipeline)
+   Écrit par blockchain_indexer via ScoreRecorded event.
+
+   Interprétation : si B se comporte mieux en pipeline qu'en solo, B distribue
+   ce crédit à tous les autres agents (dont A qui l'a alimenté en upstream).
+
+3. Power Method                                           (Kamvar et al. 2003)
+   ─────────────────────────────────────────────────────
+   t⁽⁰⁾ = p̂
+   t⁽ᵏ⁺¹⁾ = (1 − α) · Cᵀ · t⁽ᵏ⁾ + α · p̂     (renormalisé à chaque étape)
+   convergence : ‖t⁽ᵏ⁺¹⁾ − t⁽ᵏ⁾‖₁ < ε
+
+   α = 0.15 (poids du pre-trust vs propagation collaboration)
+
+4. Score Final  V[i]                                      (OpenRank, couche app)
+   ─────────────────────────────────────────────────────
+   V[i] = t[i] × f[i]
+   f[i] = moyenne glissante user_feedback normalisée max=1
+   Source DB : tag1="starred" dans reputation_events.
+
+HYPERPARAMÈTRES
+   ALPHA    = 0.15    poids ancre pre-trust
+   MAX_ITER = 100     itérations Power Method
+   EPSILON  = 1e-6    seuil convergence ‖Δt‖₁
+
+FLUX DE DONNÉES
+   p  ←  reputation_events (tag1="successRate")  ou task_p_overrides (frais)
+   C  ←  collaboration_log (solo + pipeline via ScoreRecorded)
+   f  ←  reputation_events (tag1="starred")
+   t  ←  Power Method sur (p, C)
+   V  ←  t × f  (normalisé)
+─────────────────────────────────────────────────────────────────────────────
 """
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
 
+from app.db.collaboration_repo import get_pipeline_scores, get_solo_scores
 from app.db.reputation_repo import get_reputation_signals
 
 logger = logging.getLogger(__name__)
 
 # ── Hyperparamètres ────────────────────────────────────────────────────────────
-ALPHA      = 0.15   # poids du pre-trust (juge) vs local-trust (collaborations)
-MAX_ITER   = 100    # itérations max Power Method
-EPSILON    = 1e-6   # seuil de convergence
+ALPHA    = 0.15
+MAX_ITER = 100
+EPSILON  = 1e-6
 
+
+# ── Dataclass résultat ─────────────────────────────────────────────────────────
 
 @dataclass
 class EigenTrustResult:
     """Résultat complet du calcul EigenTrust pour un ensemble d'agents."""
-    agent_ids:    list[str]            # ordre des agents dans les vecteurs
-    token_ids:    list[int]
-    pre_trust:    list[float]          # p — vecteur ancre (SuccessRate normalisé)
-    global_trust: list[float]          # t — score EigenTrust final
-    final_scores: list[float]          # t × user_feedback
-    user_feedback: list[float]         # starred normalisé
-    iterations:   int                  # nombre d'itérations jusqu'à convergence
-    converged:    bool
+    agent_ids:       list[str]
+    token_ids:       list[int]
+    pre_trust:       list[float]   # p̂ normalisé
+    global_trust:    list[float]   # t (Power Method)
+    final_scores:    list[float]   # V = t × f (normalisé)
+    user_feedback:   list[float]   # f normalisé [0, 1]
+    iterations:      int
+    converged:       bool
     scores_by_agent: dict[str, dict] = field(default_factory=dict)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  FORMULE 1 — Seed Trust p[i]
+# ══════════════════════════════════════════════════════════════════════════════
+
+def compute_p_from_scores(judge_scores: list[float]) -> float:
+    """
+    p[i] pour UN agent sur UNE tâche = mean(judge_scores).
+
+    Juges UNIQUEMENT — le user_feedback n'entre pas dans p.
+    Il alimente f[i] (tag1="starred" dans reputation_events) séparément.
+
+    Retourne une valeur ∈ [0, 100].
+    """
+    if not judge_scores:
+        return 0.0
+    return float(np.mean(judge_scores))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FORMULE 2 — Collaboration Capacity C[j][i] via ATE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def compute_C_uplift(agent_id: str) -> float:
+    """
+    ATE (Average Treatment Effect) — performance uplift pipeline vs solo.
+
+    uplift = max( mean(pipeline_scores) − mean(solo_scores), 0 ) / 100
+
+    Retourne 0.0 si l'agent n'a pas assez d'historique dans les deux modes.
+    Valeur ∈ [0, 1].
+    """
+    pipeline = [s for s in (get_pipeline_scores(agent_id) or []) if s > 0]
+    solo     = [s for s in (get_solo_scores(agent_id) or []) if s > 0]
+    if not pipeline or not solo:
+        return 0.0
+    uplift = float(np.mean(pipeline)) - float(np.mean(solo))
+    return max(uplift, 0.0) / 100.0
+
+
+def build_C_matrix(agent_ids: list[str]) -> np.ndarray:
+    """
+    Construit la matrice locale-trust C de taille N×N.
+
+    Pour chaque agent j avec un uplift pipeline > 0 :
+      C[j][i] = uplift[j] / K   pour i ≠ j ET i a au moins 1 score pipeline
+      C[j][j] = 0
+
+    Le crédit va UNIQUEMENT aux agents qui ont réellement tourné en pipeline.
+    Un agent sans historique pipeline (ex: nouveau, jamais utilisé en pipeline)
+    ne reçoit pas de crédit passif d'autres agents.
+    """
+    N = len(agent_ids)
+    C = np.zeros((N, N))
+    if N <= 1:
+        return C
+    has_pipeline = [bool(get_pipeline_scores(aid)) for aid in agent_ids]
+    uplifts = [compute_C_uplift(aid) for aid in agent_ids]
+    for j, uplift in enumerate(uplifts):
+        if uplift > 0.0:
+            eligible = [i for i in range(N) if i != j and has_pipeline[i]]
+            if not eligible:
+                eligible = [i for i in range(N) if i != j]
+            share = uplift / len(eligible)
+            for i in eligible:
+                C[j][i] = share
+    return C
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FORMULE 3 — Power Method (Kamvar 2003)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def eigentrust_iterate(
+    p:        np.ndarray,
+    C:        np.ndarray,
+    alpha:    float = ALPHA,
+    max_iter: int   = MAX_ITER,
+    epsilon:  float = EPSILON,
+) -> tuple[np.ndarray, int, bool]:
+    """
+    t⁽⁰⁾ = p
+    t⁽ᵏ⁺¹⁾ = (1 − α) · Cᵀ · t⁽ᵏ⁾ + α · p     renormalisé
+
+    Retourne (t, iterations, converged).
+    """
+    t = p.copy()
+    converged = False
+    iters = 0
+    for iters in range(1, max_iter + 1):
+        t_new = (1.0 - alpha) * (C.T @ t) + alpha * p
+        s = t_new.sum()
+        if s > 0:
+            t_new /= s
+        delta = float(np.abs(t_new - t).sum())
+        t = t_new
+        if delta < epsilon:
+            converged = True
+            break
+    return t, iters, converged
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FONCTION PRINCIPALE — compute_eigentrust
+# ══════════════════════════════════════════════════════════════════════════════
+
 def compute_eigentrust(
-    agents: list[dict],
-    collaboration_matrix: Optional[dict[str, dict[str, float]]] = None,
-    alpha: float = ALPHA,
+    agents:            list[dict],
+    task_p_overrides:  Optional[dict[str, float]] = None,
+    alpha:             float = ALPHA,
 ) -> EigenTrustResult:
     """
-    Calcule les scores EigenTrust pour une liste d'agents.
+    Calcule EigenTrust pour la liste d'agents.
 
-    agents : liste de { agent_id, token_id } — tous les agents actifs
-    collaboration_matrix : { agent_id_i: { agent_id_j: score } }
-                           Vide pour l'instant (Phase 3 Planner le remplira).
+    agents           : [{"agent_id": str, "token_id": int}]
+    task_p_overrides : {agent_id: valeur_0_100} — override p frais après une tâche.
+                       Pour les agents non-overridés, p vient de tag1="successRate" (DB).
+
+    Flux interne :
+      1. Lire signals DB (successRate + starred) pour chaque agent.
+      2. Appliquer task_p_overrides si fourni.
+      3. Construire C via build_C_matrix (collaboration_log ATE).
+      4. Lancer eigentrust_iterate (Power Method).
+      5. Calculer V[i] = t[i] × f[i] (score final).
     """
     N = len(agents)
     if N == 0:
         return EigenTrustResult([], [], [], [], [], [], 0, True, {})
 
+    # ── Cas spécial N=1 : scores absolus (relatifs sans sens avec 1 seul agent) ──
+    if N == 1:
+        aid = agents[0]["agent_id"]
+        tid = agents[0].get("token_id", 0)
+        raw_score = 0.0
+        if task_p_overrides and aid in task_p_overrides:
+            raw_score = max(0.0, float(task_p_overrides[aid]))
+        else:
+            # Try collaboration_log (solo, then pipeline — both are real judge scores)
+            scores = get_solo_scores(aid) or get_pipeline_scores(aid)
+            if scores:
+                nonzero = [s for s in scores if s > 0]
+                recent  = nonzero[-5:] if nonzero else []
+                raw_score = max(0.0, sum(recent) / len(recent)) if recent else 0.0
+        starred_vals = []
+        signals = get_reputation_signals(tid) if tid else []
+        for sig in signals:
+            dec = sig["value_decimals"] or 0
+            val = sig["value"] / (10 ** dec) if dec else float(sig["value"])
+            if sig["tag1"] == "starred":
+                starred_vals.append(max(0.0, val))
+        raw_uf   = (sum(starred_vals) / len(starred_vals)) if starred_vals else 0.0
+        p_val    = raw_score / 100.0
+        uf_val   = raw_uf / 100.0 if raw_uf > 0 else 0.5
+        final_val = p_val * uf_val
+        score_entry = {
+            "pre_trust":     round(p_val,     6),
+            "global_trust":  round(p_val,     6),
+            "user_feedback": round(uf_val,    4),
+            "final_score":   round(final_val, 6),
+        }
+        return EigenTrustResult(
+            agent_ids=[aid],
+            token_ids=[tid],
+            pre_trust=[p_val],
+            global_trust=[p_val],
+            final_scores=[final_val],
+            user_feedback=[uf_val],
+            iterations=0,
+            converged=True,
+            scores_by_agent={aid: score_entry},
+        )
+
     agent_ids = [a["agent_id"] for a in agents]
-    token_ids = [a["token_id"] for a in agents]
-    idx       = {aid: i for i, aid in enumerate(agent_ids)}
+    token_ids = [a.get("token_id", 0) for a in agents]
 
-    # ── Phase 1 : Construire p (pre-trust = SuccessRate des juges) ─────────────
-
-    success_rates = np.zeros(N)
-    user_feedbacks = np.zeros(N)
+    success_rates  = np.zeros(N)
+    uf_sums        = np.zeros(N)
+    uf_counts      = np.zeros(N)
 
     for i, agent in enumerate(agents):
-        signals = get_reputation_signals(agent["token_id"])
+        aid = agent["agent_id"]
+        tid = agent.get("token_id", 0)
+
+        signals = get_reputation_signals(tid) if tid else []
         for sig in signals:
+            dec = sig["value_decimals"] or 0
+            val = sig["value"] / (10 ** dec) if dec else float(sig["value"])
             if sig["tag1"] == "successRate":
-                # value ∈ [0, 100], valueDecimals=0
-                val = sig["value"] / (10 ** sig["value_decimals"]) if sig["value_decimals"] else sig["value"]
-                success_rates[i] += max(0.0, float(val))
+                success_rates[i] += max(0.0, val)
             elif sig["tag1"] == "starred":
-                # value ∈ [20, 100] (score×20), on accumule pour moyenne
-                val = sig["value"] / (10 ** sig["value_decimals"]) if sig["value_decimals"] else sig["value"]
-                user_feedbacks[i] += max(0.0, float(val))
+                uf_sums[i]   += max(0.0, val)
+                uf_counts[i] += 1
 
-    # Normaliser p → somme = 1  (si tous à zéro, distribution uniforme)
+        if task_p_overrides and aid in task_p_overrides:
+            success_rates[i] = max(0.0, float(task_p_overrides[aid]))
+
+    # ── Normaliser p ──────────────────────────────────────────────────────────
     p_sum = success_rates.sum()
-    if p_sum > 0:
-        p = success_rates / p_sum
-    else:
-        p = np.ones(N) / N   # fallback uniforme si aucun verdict juge
+    p = success_rates / p_sum if p_sum > 0 else np.ones(N) / N
 
-    # Normaliser user_feedback → [0, 1]
-    uf_max = user_feedbacks.max()
-    if uf_max > 0:
-        uf_normalized = user_feedbacks / uf_max
-    else:
-        uf_normalized = np.ones(N)   # pas de notes → multiplier par 1 (neutre)
+    # ── Normaliser f (user_feedback) → [0, 1] — moyenne des étoiles / 100 ──────
+    # Moyenne (pas somme) pour qu'un agent avec N avis garde la même valeur.
+    # Fallback 0.5 si aucun feedback → neutre.
+    uf_avg = np.where(uf_counts > 0, uf_sums / uf_counts, 0.0)
+    uf = uf_avg / 100.0
+    uf = np.where(uf > 0, uf, 0.5)  # agents sans feedback → 0.5 (neutre)
 
-    # ── Phase 1 : Construire C (local-trust = collaborations Agent→Agent) ──────
+    # ── Construire C (ATE depuis collaboration_log) ───────────────────────────
+    C = build_C_matrix(agent_ids)
 
-    C = np.zeros((N, N))
-
-    if collaboration_matrix:
-        for agent_i, partners in collaboration_matrix.items():
-            i = idx.get(agent_i)
-            if i is None:
-                continue
-            row_sum = sum(v for v in partners.values() if v > 0)
-            if row_sum == 0:
-                continue
-            for agent_j, score in partners.items():
-                j = idx.get(agent_j)
-                if j is not None and score > 0:
-                    C[i][j] = score / row_sum
-
-    # Si C est vide (pas encore de collaborations), utiliser identité normalisée
-    # → chaque agent se fait confiance à lui-même (neutre, n'influence pas EigenTrust)
+    # Fallback si aucune collaboration → identité normalisée (t converge vers p)
     if C.sum() == 0:
-        C = np.eye(N) / N if N > 0 else C
+        C = np.eye(N) / N
 
-    # Normaliser les lignes de C (chaque ligne = distribution de confiance sortante)
-    row_sums = C.sum(axis=1, keepdims=True)
-    row_sums[row_sums == 0] = 1   # éviter division par zéro
-    C = C / row_sums
-
-    # ── Phase 2 : Power Method ─────────────────────────────────────────────────
-    #
-    #   t^(k+1) = (1 - α) × Cᵀ × t^(k) + α × p
-    #
-
-    t = p.copy()   # initialisation avec pre-trust
-    converged = False
-    iters = 0
-
-    for iters in range(1, MAX_ITER + 1):
-        t_new = (1 - alpha) * (C.T @ t) + alpha * p
-        # Renormaliser pour stabilité numérique
-        t_new_sum = t_new.sum()
-        if t_new_sum > 0:
-            t_new = t_new / t_new_sum
-        delta = np.abs(t_new - t).sum()
-        t = t_new
-        if delta < EPSILON:
-            converged = True
-            break
+    # ── Power Method ─────────────────────────────────────────────────────────
+    t, iters, converged = eigentrust_iterate(p, C, alpha)
 
     logger.info(
-        "EigenTrust: N=%d iterations=%d converged=%s alpha=%.2f",
+        "EigenTrust: N=%d iters=%d converged=%s alpha=%.2f",
         N, iters, converged, alpha,
     )
 
-    # ── Phase 3 : Global-Trust (t = résultat brut) ─────────────────────────────
+    # ── Score Final V[i] = t[i] × f[i] ───────────────────────────────────────
+    final = t * uf
+    fs = final.sum()
+    if fs > 0:
+        final /= fs
 
-    global_trust = t.tolist()
-
-    # ── Phase 4 : Score Final = GlobalTrust × UserFeedback ────────────────────
-
-    final = t * uf_normalized
-    final_sum = final.sum()
-    if final_sum > 0:
-        final = final / final_sum   # renormaliser pour garder somme=1
-
-    final_scores  = final.tolist()
-    uf_normalized_list = uf_normalized.tolist()
-
-    # ── Résumé par agent ───────────────────────────────────────────────────────
+    global_trust_list = t.tolist()
+    final_scores_list = final.tolist()
+    uf_list           = uf.tolist()
 
     scores_by_agent = {
         agent_ids[i]: {
-            "pre_trust":      round(p[i], 6),
-            "global_trust":   round(global_trust[i], 6),
-            "user_feedback":  round(uf_normalized_list[i], 4),
-            "final_score":    round(final_scores[i], 6),
+            "pre_trust":    round(float(p[i]),                 6),
+            "global_trust": round(float(global_trust_list[i]), 6),
+            "user_feedback": round(float(uf_list[i]),          4),
+            "final_score":  round(float(final_scores_list[i]), 6),
         }
         for i in range(N)
     }
@@ -188,10 +335,78 @@ def compute_eigentrust(
         agent_ids=agent_ids,
         token_ids=token_ids,
         pre_trust=p.tolist(),
-        global_trust=global_trust,
-        final_scores=final_scores,
-        user_feedback=uf_normalized_list,
+        global_trust=global_trust_list,
+        final_scores=final_scores_list,
+        user_feedback=uf_list,
         iterations=iters,
         converged=converged,
         scores_by_agent=scores_by_agent,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FONCTIONS DE WORKFLOW (appelées après validation)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def process_solo_task(
+    agent_id:     str,
+    judge_scores: list[float],
+    agents:       Optional[list[dict]] = None,
+) -> EigenTrustResult:
+    """
+    Workflow tâche SOLO (mode=0) :
+      1. Calcule p[agent_id] = mean(judge_scores)   — juges uniquement
+      2. Lance EigenTrust global avec ce p frais comme override.
+
+    user_feedback → va dans f[i] via reputation_events (tag1="starred"),
+                    PAS dans p[i].
+
+    Note : l'écriture dans collaboration_log (mode=0) est faite en parallèle
+           par blockchain_indexer via ScoreRecorded event — PAS ici.
+
+    agents : si None, chargé depuis identity_repo (tous agents enregistrés).
+    """
+    p_value = compute_p_from_scores(judge_scores)
+    if agents is None:
+        from app.db.identity_repo import get_all_agent_identities
+        rows   = get_all_agent_identities()
+        agents = [
+            {"agent_id": r["agent_id"], "token_id": r["current_token_id"]}
+            for r in rows if r.get("current_token_id")
+        ]
+    logger.info("process_solo_task: agent=%s p=%.2f", agent_id, p_value)
+    return compute_eigentrust(agents, task_p_overrides={agent_id: p_value})
+
+
+def process_pipeline_task(
+    pipeline: list[dict],
+    agents:   Optional[list[dict]] = None,
+) -> EigenTrustResult:
+    """
+    Workflow tâche PIPELINE (mode=1) :
+      1. Calcule p[i] pour chaque agent du pipeline.
+      2. Lance EigenTrust global avec ces p frais comme overrides.
+
+    pipeline : [{"agent_id": str, "judge_scores": list[float]}]
+               p[i] = mean(judge_scores[i]) pour chaque agent — juges uniquement.
+               user_feedback → va dans f[i] via reputation_events (tag1="starred").
+
+    Note : l'écriture dans collaboration_log (mode=1) est faite par
+           blockchain_indexer via ScoreRecorded — PAS ici.
+    """
+    overrides = {
+        entry["agent_id"]: compute_p_from_scores(entry["judge_scores"])
+        for entry in pipeline
+    }
+    if agents is None:
+        from app.db.identity_repo import get_all_agent_identities
+        rows   = get_all_agent_identities()
+        agents = [
+            {"agent_id": r["agent_id"], "token_id": r["current_token_id"]}
+            for r in rows if r.get("current_token_id")
+        ]
+    logger.info(
+        "process_pipeline_task: %d agents, overrides=%s",
+        len(pipeline), {k: round(v, 1) for k, v in overrides.items()},
+    )
+    return compute_eigentrust(agents, task_p_overrides=overrides)
