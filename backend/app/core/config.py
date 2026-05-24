@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     storage_path:    str = "/tmp/agentmarket"
     max_zip_size_mb: int = 500
+    database_url:    str = ""
 
     use_ipfs:       bool = False
     pinata_api_key: str  = ""

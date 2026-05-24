@@ -149,6 +149,19 @@ def get_judge_verdicts(agent_id: str) -> list[dict[str, Any]]:
         conn.close()
 
 
+def get_verdicts_by_judge(judge_id: str) -> list[dict[str, Any]]:
+    """Return all verdicts emitted BY a specific judge (judge_id column), newest first."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM judge_verdicts WHERE judge_id = ? ORDER BY created_at DESC",
+            (judge_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def clear_judge_verdicts(agent_id: str) -> None:
     """Remove old verdicts before a fresh validation run."""
     conn = get_connection()

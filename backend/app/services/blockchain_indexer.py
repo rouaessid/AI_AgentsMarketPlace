@@ -114,6 +114,17 @@ _ESCROW_ABI = [
         "name": "ClientRefunded",
         "type": "event",
     },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True,  "name": "taskId",           "type": "string"},
+            {"indexed": True,  "name": "client",           "type": "address"},
+            {"indexed": False, "name": "amount",           "type": "uint256"},
+            {"indexed": False, "name": "participantCount", "type": "uint256"},
+        ],
+        "name": "PipelinePaymentDeposited",
+        "type": "event",
+    },
 ]
 
 _STAKING_ABI = [
@@ -224,6 +235,20 @@ _VALIDATION_ABI = [
             {"indexed": False, "name": "mode",    "type": "uint8"},
         ],
         "name": "ScoreRecorded",
+        "type": "event",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True,  "name": "taskId",          "type": "string"},
+            {"indexed": True,  "name": "judgeId",         "type": "string"},
+            {"indexed": False, "name": "vote",            "type": "uint8"},
+            {"indexed": False, "name": "taskCompletion",  "type": "uint8"},
+            {"indexed": False, "name": "outputQuality",   "type": "uint8"},
+            {"indexed": False, "name": "noFabrication",   "type": "uint8"},
+            {"indexed": False, "name": "toolUsage",       "type": "uint8"},
+        ],
+        "name": "VoteRevealed",
         "type": "event",
     },
 ]
@@ -527,6 +552,21 @@ class BlockchainIndexer:
                 block_number=block,
             )
 
+        elif event_name == "PipelinePaymentDeposited":
+            logger.info(
+                "Indexer → PipelinePaymentDeposited: task=%s client=%s amount=%s participants=%d",
+                args["taskId"], args["client"][:10], args["amount"], args["participantCount"],
+            )
+            insert_escrow_event(
+                event_id=event_id,
+                task_id=args["taskId"],
+                event_type="pipeline_deposited",
+                client=args["client"],
+                amount_wei=str(args["amount"]),
+                tx_hash=tx,
+                block_number=block,
+            )
+
     # ── StakingContract ───────────────────────────────────────────────────────
 
     def _handle_staking(self, event_name: str, log: Any) -> None:
@@ -623,6 +663,30 @@ class BlockchainIndexer:
                 event_id=event_id,
                 task_id=args["taskId"],
                 event_type="expired",
+                tx_hash=tx,
+                block_number=block,
+            )
+
+        elif event_name == "VoteRevealed":
+            task_id  = args["taskId"]
+            judge_id = args["judgeId"]
+            vote     = int(args["vote"])   # 0=NONE, 1=VALID, 2=INVALID
+            verdict  = "VALID" if vote == 1 else "INVALID" if vote == 2 else "ABSTAIN"
+            score    = float(
+                args["taskCompletion"] + args["outputQuality"] +
+                args["noFabrication"] + args["toolUsage"]
+            ) / 4.0
+            logger.info(
+                "Indexer → VoteRevealed: taskId=%s judgeId=%s verdict=%s score=%.1f",
+                task_id, judge_id, verdict, score,
+            )
+            insert_validation_event(
+                event_id=event_id,
+                task_id=task_id,
+                event_type="vote_revealed",
+                judge_id=judge_id,
+                verdict=verdict,
+                score=score,
                 tx_hash=tx,
                 block_number=block,
             )

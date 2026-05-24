@@ -1,75 +1,83 @@
 """
-judge_reputation_repo.py — Opérations DB pour la réputation des juges.
+judge_reputation_repo.py — Réputation des juges calculée depuis reputation_events.
+
+Source de vérité : blockchain (ReputationRegistry)
+  tag1 = "CONSENSUS" → juge a voté avec le consensus  (+1 accord)
+  tag1 = "DEVIATED"  → juge a voté contre le consensus
+  tag1 = "ABSENT"    → juge n'a pas voté
 
 agreement_rate = agreement_count / total_validations
-  → 0.5 par défaut (neutre) avant la 1ère validation
-  → mis à jour après chaque session de validation
-  → mirrored on-chain via ReputationRegistry (tag1="judgeAccuracy")
+  → 0.5 par défaut (neutre) si aucune validation trouvée
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from app.db.database import ReputationEvent, get_session
 
-from app.db.database import JudgeReputation, get_session
+
+def _compute_from_events(judge_id: str) -> dict:
+    """
+    Lit la dernière entrée judgeAccuracy depuis reputation_events.
+    Le backend écrit : tag1="judgeAccuracy", tag2=judge_id, value=agreement_rate×100
+    """
+    with get_session() as s:
+        # Prendre l'entrée la plus récente pour ce juge
+        row = (
+            s.query(ReputationEvent)
+            .filter(
+                ReputationEvent.tag1 == "judgeAccuracy",
+                ReputationEvent.tag2 == judge_id,
+                ReputationEvent.is_revoked == 0,
+            )
+            .order_by(ReputationEvent.block_number.desc())
+            .first()
+        )
+
+        if not row:
+            return {
+                "judge_id":          judge_id,
+                "total_validations": 0,
+                "agreement_count":   0,
+                "agreement_rate":    0.5,
+            }
+
+        agreement_rate = row.value / 100.0  # value = rate × 100
+
+        return {
+            "judge_id":          judge_id,
+            "total_validations": 0,   # non stocké on-chain
+            "agreement_count":   0,   # non stocké on-chain
+            "agreement_rate":    agreement_rate,
+        }
 
 
 def get_judge_reputation(judge_id: str) -> dict:
-    """Retourne la réputation d'un juge. Crée la ligne si absente (rate=0.5)."""
-    with get_session() as s:
-        row = s.get(JudgeReputation, judge_id)
-        if not row:
-            row = JudgeReputation(
-                judge_id=judge_id,
-                total_validations=0,
-                agreement_count=0,
-                agreement_rate=0.5,
-            )
-            s.add(row)
-            s.commit()
-            s.refresh(row)
-        return {
-            "judge_id":          row.judge_id,
-            "total_validations": row.total_validations,
-            "agreement_count":   row.agreement_count,
-            "agreement_rate":    row.agreement_rate,
-        }
+    """Retourne la réputation d'un juge calculée depuis la blockchain."""
+    return _compute_from_events(judge_id)
 
 
 def update_judge_agreement(judge_id: str, agreed: bool) -> float:
     """
-    Incrémente total_validations (et agreement_count si agreed).
-    Retourne le nouveau agreement_rate.
+    Appelé par judge_service après chaque validation locale.
+    Le vrai calcul vient de reputation_events (blockchain) —
+    cette fonction retourne le taux recalculé immédiatement.
+    Le backend écrit le résultat on-chain séparément via eigentrust_sync.
     """
-    with get_session() as s:
-        row = s.get(JudgeReputation, judge_id)
-        if not row:
-            row = JudgeReputation(
-                judge_id=judge_id,
-                total_validations=0,
-                agreement_count=0,
-                agreement_rate=0.5,
-            )
-            s.add(row)
-
-        row.total_validations += 1
-        if agreed:
-            row.agreement_count += 1
-        row.agreement_rate = row.agreement_count / row.total_validations
-        row.updated_at = datetime.now(timezone.utc).isoformat()
-        s.commit()
-        return row.agreement_rate
+    rep = _compute_from_events(judge_id)
+    return rep["agreement_rate"]
 
 
 def get_all_reputations() -> list[dict]:
-    """Retourne la réputation de tous les juges connus."""
+    """Retourne la réputation de tous les juges connus depuis reputation_events."""
     with get_session() as s:
-        rows = s.query(JudgeReputation).all()
-        return [
-            {
-                "judge_id":          r.judge_id,
-                "total_validations": r.total_validations,
-                "agreement_count":   r.agreement_count,
-                "agreement_rate":    r.agreement_rate,
-            }
-            for r in rows
-        ]
+        rows = (
+            s.query(ReputationEvent.tag2)
+            .filter(
+                ReputationEvent.tag1 == "judgeAccuracy",
+                ReputationEvent.is_revoked == 0,
+                ReputationEvent.tag2.isnot(None),
+            )
+            .distinct()
+            .all()
+        )
+    judge_ids = [r[0] for r in rows if r[0]]
+    return [_compute_from_events(jid) for jid in judge_ids]

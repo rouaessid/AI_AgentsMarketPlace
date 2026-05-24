@@ -204,7 +204,34 @@ async def list_by_owner(owner_address: str) -> JSONResponse:
     if not (owner_address.startswith("0x") and len(owner_address) == 42):
         raise HTTPException(400, detail="Adresse Ethereum invalide")
     records = await agent_svc.list_by_owner(owner_address)
-    return JSONResponse({"agents": [r.model_dump(mode="json") for r in records], "total": len(records)})
+
+    from app.models.agent import AgentType as _AgentType
+    from app.db.judge_reputation_repo import get_judge_reputation
+    from app.db.escrow_repo import get_escrow_events_for_agent
+
+    result = []
+    for r in records:
+        data = r.model_dump(mode="json")
+
+        # ── Earnings from escrow: sum released payments for this agent ──────
+        events        = get_escrow_events_for_agent(r.agent_id)
+        released_wei  = sum(int(e["amount_wei"] or 0) for e in events if e["event_type"] == "released")
+        data["earnings_eth"] = round(released_wei / 1e18, 6)
+
+        # ── Judge-specific metrics injected into capabilities ────────────────
+        if r.agent_type == _AgentType.JUDGE:
+            rep  = get_judge_reputation(r.agent_id)
+            reg  = data.get("registration_file") or {}
+            caps = dict(reg.get("capabilities") or {})
+            caps["tasks_performed"]  = rep["total_validations"]
+            caps["reputation_score"] = round(rep["agreement_rate"] * 100, 1)
+            caps["success_rate"]     = round(rep["agreement_rate"] * 100, 1)
+            if data.get("registration_file") is not None:
+                data["registration_file"]["capabilities"] = caps
+
+        result.append(data)
+
+    return JSONResponse({"agents": result, "total": len(result)})
 
 
 @router.get("")
@@ -528,6 +555,12 @@ async def purchase_agent(
             validation_status=_get_val_status(agent_id),
         )
 
+    # Verify payment exists on-chain before granting access
+    from app.db.escrow_repo import get_escrow_events_for_task
+    onchain = get_escrow_events_for_task(body.task_id)
+    if not any(e["event_type"] == "deposited" for e in onchain):
+        raise HTTPException(402, detail="Paiement non trouvé on-chain — attendez la confirmation du bloc")
+
     access_id = access_repo.create_access_grant(
         agent_id=agent_id,
         buyer_wallet=body.buyer_wallet,
@@ -724,6 +757,96 @@ async def get_feedback_info(
         "value_on_chain":     score * 20,
         "reputation_address": reputation_address,
         "call_data":          call_data,
+    })
+
+
+# ── Judge-specific endpoints ──────────────────────────────────────────────────
+
+@router.get("/{agent_id}/judge-stats")
+async def get_judge_stats(agent_id: str):
+    """Aggregated statistics for a judge agent (for the 'My Agents > View' panel)."""
+    from app.db.judge_reputation_repo import get_judge_reputation
+    from app.db.access_repo import get_verdicts_by_judge
+    from datetime import datetime, timezone, timedelta
+
+    rep      = get_judge_reputation(agent_id)
+    verdicts = get_verdicts_by_judge(agent_id)
+    now      = datetime.now(timezone.utc)
+
+    total       = len(verdicts)
+    valid_count = sum(1 for v in verdicts if v["verdict"] == "VALID")
+    avg_score   = round(sum(v["score"] for v in verdicts) / total, 1) if total else 0
+    valid_rate  = round((valid_count / total) * 100, 1) if total else 0
+    this_month  = sum(
+        1 for v in verdicts
+        if (v.get("created_at") or "")[:7] == now.strftime("%Y-%m")
+    )
+
+    # Monthly validation volume — last 12 months
+    monthly_data = []
+    for i in range(11, -1, -1):
+        month_num  = now.month - i
+        year_delta = 0
+        while month_num <= 0:
+            month_num  += 12
+            year_delta -= 1
+        yr  = now.year + year_delta
+        ym  = f"{yr:04d}-{month_num:02d}"
+        lbl = datetime(yr, month_num, 1).strftime("%b")
+        cnt = sum(1 for v in verdicts if (v.get("created_at") or "")[:7] == ym)
+        monthly_data.append({"month": lbl, "validations": cnt})
+
+    # Weekly verdicts breakdown — last 7 days
+    weekly_data = []
+    for i in range(6, -1, -1):
+        day     = now - timedelta(days=i)
+        day_str = day.strftime("%Y-%m-%d")
+        lbl     = day.strftime("%a")
+        valid   = sum(1 for v in verdicts
+                      if (v.get("created_at") or "")[:10] == day_str and v["verdict"] == "VALID")
+        invalid = sum(1 for v in verdicts
+                      if (v.get("created_at") or "")[:10] == day_str and v["verdict"] == "INVALID")
+        weekly_data.append({"day": lbl, "valid": valid, "invalid": invalid})
+
+    return JSONResponse({
+        "judge_id":          agent_id,
+        "total_validations": rep["total_validations"],
+        "agreement_rate":    round(rep["agreement_rate"] * 100, 1),
+        "agreement_count":   rep["agreement_count"],
+        "avg_score":         avg_score,
+        "valid_rate":        valid_rate,
+        "this_month":        this_month,
+        "monthly_data":      monthly_data,
+        "weekly_data":       weekly_data,
+    })
+
+
+@router.get("/{agent_id}/judge-history")
+async def get_judge_history(
+    agent_id: str,
+    limit:  int = Query(50,  ge=1, le=200),
+    offset: int = Query(0,   ge=0),
+):
+    """Paginated list of verdicts issued by this judge agent."""
+    from app.db.access_repo import get_verdicts_by_judge
+
+    all_v = get_verdicts_by_judge(agent_id)
+    page  = all_v[offset: offset + limit]
+
+    return JSONResponse({
+        "total":  len(all_v),
+        "offset": offset,
+        "limit":  limit,
+        "verdicts": [
+            {
+                "agent_id":      v["agent_id"],
+                "verdict":       v["verdict"],
+                "score":         v["score"],
+                "justification": v["justification"],
+                "created_at":    v["created_at"],
+            }
+            for v in page
+        ],
     })
 
 

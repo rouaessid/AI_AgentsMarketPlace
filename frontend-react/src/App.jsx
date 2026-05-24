@@ -4,6 +4,7 @@ import Marketplace from './pages/Marketplace'
 import AgentDetail from './pages/AgentDetail'
 import SellerDashboard from './pages/SellerDashboard'
 import RegisterAgent from './pages/RegisterAgent'
+import JudgeAgentDetail from './pages/JudgeAgentDetail'
 import Home from './pages/Home'
 import Solutions from './pages/Solutions'
 import TaskOrchestrator from './pages/TaskOrchestrator'
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="orchestrator" element={<TaskOrchestrator />} />
         <Route path="seller" element={<ProviderRoute><SellerDashboard /></ProviderRoute>} />
         <Route path="seller/register" element={<ProviderRoute><RegisterAgent /></ProviderRoute>} />
+        <Route path="seller/judge/:agentId" element={<ProviderRoute><JudgeAgentDetail /></ProviderRoute>} />
       </Route>
     </Routes>
   )

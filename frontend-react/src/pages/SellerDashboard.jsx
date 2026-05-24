@@ -42,12 +42,25 @@ export default function SellerDashboard() {
 
   useEffect(() => { fetchMyAgents() }, [fetchMyAgents])
 
-  const totalEarnings = agents.reduce((s, a) => s + Number.parseFloat(a.earnings_eth || 0), 0).toFixed(2)
+  function fmtEth(val) {
+    const n = parseFloat(val) || 0
+    if (n === 0)    return '0.00'
+    if (n < 0.001)  return n.toFixed(6)
+    if (n < 0.01)   return n.toFixed(4)
+    if (n < 1)      return n.toFixed(3)
+    return n.toFixed(2)
+  }
+
+  const totalEarnings = agents.reduce((s, a) => s + (parseFloat(a.earnings_eth) || 0), 0)
   const totalTasks    = agents.reduce((s, a) => s + (a.metrics?.tasks_performed || 0), 0)
   const avgReputation = agents.length
     ? Math.round(agents.reduce((s, a) => s + (a.metrics?.reputation_score || 0), 0) / agents.length)
     : 0
-  const totalStaked   = agents.reduce((s, a) => s + (a.stake_amount || 0), 0).toFixed(2)
+  const totalStaked   = agents.reduce((s, a) => s + (parseFloat(a.stake_amount) || 0), 0)
+
+  // Separate provider / judge counts for context labels
+  const providerCount = agents.filter(a => a.agent_type !== 'judge').length
+  const judgeCount    = agents.filter(a => a.agent_type === 'judge').length
 
   const ACTIVITY = [
     { id: 'a1', agent: agents[0]?.name || 'Agent', msg: 'Task completed → +0.072 ETH',      time: '2m ago',  ok: true  },
@@ -92,10 +105,10 @@ export default function SellerDashboard() {
         {/* Stats row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           {[
-            { label: 'Total Earnings',  value: `${totalEarnings} ETH`,       icon: Wallet,     color: '#10b981', sub: 'All-time earnings'     },
-            { label: 'Tasks Completed', value: totalTasks.toLocaleString(),   icon: CheckCircle,color: '#6366f1', sub: 'Across all agents'      },
-            { label: 'Avg Reputation',  value: `${avgReputation}/100`,        icon: TrendingUp, color: '#8b5cf6', sub: 'Marketplace avg: 72'    },
-            { label: 'Total Staked',    value: `${totalStaked} ETH`,          icon: Shield,     color: '#f59e0b', sub: 'Locked as guarantee'    },
+            { label: 'Total Earnings',  value: `${fmtEth(totalEarnings)} ETH`,  icon: Wallet,     color: '#10b981', sub: 'All-time earnings'                              },
+            { label: 'Tasks / Validations', value: totalTasks.toLocaleString(), icon: CheckCircle,color: '#6366f1', sub: `${providerCount} providers · ${judgeCount} judges` },
+            { label: 'Avg Reputation',  value: `${avgReputation}/100`,          icon: TrendingUp, color: '#8b5cf6', sub: avgReputation > 0 ? 'Across all agents' : 'No data yet' },
+            { label: 'Total Staked',    value: `${fmtEth(totalStaked)} ETH`,    icon: Shield,     color: '#f59e0b', sub: 'Locked as guarantee'                            },
           ].map(({ label, value, icon: Icon, color, sub }) => (
             <motion.div key={label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
               className="card p-5 shadow-card-md">
@@ -488,10 +501,11 @@ function AgentRow({ agent, index }) {
           {/* Actions */}
           <div className="flex items-center gap-2 flex-wrap">
             {isJudge ? (
-              <span className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg
-                               bg-violet-50 border border-violet-200 text-violet-700 font-medium">
-                <Eye size={11} /> Validation only
-              </span>
+              <Link to={`/seller/judge/${agent.agent_id}`}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border
+                           border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 transition-all font-medium">
+                <Eye size={11} /> View
+              </Link>
             ) : (
               <Link to={`/marketplace/${agent.agent_id}`}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-am-border
@@ -504,13 +518,11 @@ function AgentRow({ agent, index }) {
                          text-am-text-2 hover:text-am-text hover:bg-am-surface transition-all">
               <Edit2 size={11} /> Edit
             </button>
-            {!isJudge && (
-              <button onClick={() => setNewVersion(true)}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-am-indigo/40
-                           text-am-indigo hover:bg-indigo-50 transition-all">
-                <GitBranch size={11} /> New Version
-              </button>
-            )}
+            <button onClick={() => setNewVersion(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-am-indigo/40
+                         text-am-indigo hover:bg-indigo-50 transition-all">
+              <GitBranch size={11} /> New Version
+            </button>
             <button className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-am-border
                                text-am-text-2 hover:text-am-text hover:bg-am-surface transition-all">
               <BarChart2 size={11} /> Analytics
@@ -557,7 +569,7 @@ function AgentRow({ agent, index }) {
         )}
       </div>
 
-      {editAgent  && <EditAgentModal  agent={agent} onClose={() => setEditAgent(false)} />}
+      {editAgent  && <EditAgentModal  agent={agent} onClose={() => setEditAgent(false)}  />}
       {newVersion && <NewVersionModal agent={agent} onClose={() => setNewVersion(false)} />}
     </motion.div>
   )

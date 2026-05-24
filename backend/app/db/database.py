@@ -22,13 +22,16 @@ logger   = logging.getLogger(__name__)
 settings = get_settings()
 
 # ── Engine ─────────────────────────────────────────────────────────────────────
-_db_path    = Path(settings.storage_path) / "agentmarket.db"
-DATABASE_URL = f"sqlite:///{_db_path}"
+_db_path     = Path(settings.storage_path) / "agentmarket.db"
+_sqlite_url  = f"sqlite:///{_db_path}"
+DATABASE_URL = settings.database_url if settings.database_url else _sqlite_url
 
-# connect_args only needed for SQLite (allows multi-thread access)
+_is_postgres = DATABASE_URL.startswith("postgresql")
+
+# connect_args only needed for SQLite
 _engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={} if _is_postgres else {"check_same_thread": False},
     echo=False,
 )
 SessionLocal = sessionmaker(bind=_engine, autocommit=False, autoflush=False)
@@ -350,17 +353,28 @@ class JudgeReputation(Base):
 
 # ── Init ───────────────────────────────────────────────────────────────────────
 
+def _get_columns(conn, table: str) -> set[str]:
+    """Return existing column names for a table — works for SQLite and Postgres."""
+    if _is_postgres:
+        rows = conn.execute(text(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = :t"
+        ), {"t": table})
+    else:
+        rows = conn.execute(text(f"PRAGMA table_info({table})"))
+    return {row[0] if _is_postgres else row[1] for row in rows}
+
+
 def _apply_migrations() -> None:
     """Add columns/tables that create_all cannot handle (existing tables)."""
     with _engine.connect() as conn:
-        existing_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))}
+        existing_cols = _get_columns(conn, "agents")
         if "capability_embedding" not in existing_cols:
             conn.execute(text("ALTER TABLE agents ADD COLUMN capability_embedding TEXT"))
             conn.commit()
             logger.info("Migration: added agents.capability_embedding")
 
         # Pack access fields on pipeline_tasks
-        pt_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(pipeline_tasks)"))}
+        pt_cols = _get_columns(conn, "pipeline_tasks")
         for col, typedef in [
             ("pack_id",           "TEXT"),
             ("pack_name",         "TEXT"),
@@ -376,10 +390,11 @@ def _apply_migrations() -> None:
 
 def init_db() -> None:
     """Create all tables if they don't exist. Safe to call multiple times."""
-    _db_path.parent.mkdir(parents=True, exist_ok=True)
+    if not _is_postgres:
+        _db_path.parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(_engine)
     _apply_migrations()
-    logger.info("DB initialisee (SQLAlchemy): %s", _db_path)
+    logger.info("DB initialisee: %s", DATABASE_URL.split("@")[-1])
 
 
 # ── Legacy helper (used by access_repo.py + agent_repo.py until fully migrated)

@@ -673,6 +673,12 @@ async def confirm_pack_access(task_id: str, body: ConfirmAccessRequest) -> JSONR
     if task.get("buyer_wallet", "").lower() != body.buyer_wallet.lower():
         raise HTTPException(403, detail="Wallet mismatch")
 
+    # Verify pipeline payment exists on-chain before granting access
+    from app.db.escrow_repo import get_escrow_events_for_task
+    onchain = get_escrow_events_for_task(task_id)
+    if not any(e["event_type"] == "pipeline_deposited" for e in onchain):
+        raise HTTPException(402, detail="Paiement pipeline non trouvé on-chain — attendez la confirmation du bloc")
+
     from app.core.config import get_settings
     access_duration = getattr(get_settings(), "pack_access_duration_days", 30)
 

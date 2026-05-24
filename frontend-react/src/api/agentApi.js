@@ -108,6 +108,11 @@ export const agentApi = {
       method: 'POST',
       body: JSON.stringify({ agent_id: agentId, score }),
     }),
+
+  // ── Judge-specific ────────────────────────────────────────────────────────
+  judgeStats:   (agentId) => fetchJSON(`${BASE}/${agentId}/judge-stats`),
+  judgeHistory: (agentId, limit = 50, offset = 0) =>
+    fetchJSON(`${BASE}/${agentId}/judge-history?limit=${limit}&offset=${offset}`),
 }
 
 const TASKS_BASE = '/api/v1/tasks'
@@ -229,5 +234,11 @@ export function normalizeAgent(a) {
       monthly_tasks: caps.monthly_tasks ?? [],
       weekly_success: caps.weekly_success ?? [],
     },
+    // Judge-specific fields — stored inside registration_file, not at AgentRecord root
+    evaluation_skills:    a.evaluation_skills    ?? reg.evaluation_skills    ?? [],
+    validated_task_types: a.validated_task_types ?? reg.validated_task_types ?? [],
+    evaluation_domains:   a.evaluation_domains   ?? reg.evaluation_domains   ?? [],
+    tools_used:           a.tools_used           ?? reg.tools_used           ?? [],
+    evaluation_style:     a.evaluation_style     ?? reg.evaluation_style     ?? '',
   }
 }
