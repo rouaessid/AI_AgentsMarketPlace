@@ -10,16 +10,25 @@ const NETWORK_CONFIG = {
   polygonMumbai: { rpcUrl: process.env.POLYGON_MUMBAI_RPC_URL || "https://rpc-mumbai.maticvigil.com", chainId: 80001 },
   polygon:       { rpcUrl: process.env.POLYGON_RPC_URL        || "https://polygon-rpc.com",           chainId: 137   },
   sepolia:       { rpcUrl: process.env.SEPOLIA_RPC_URL        || "",                                   chainId: 11155111 },
+  baseSepolia:   { rpcUrl: process.env.BASE_SEPOLIA_RPC_URL   || "https://sepolia.base.org",           chainId: 84532 },
 };
 
 async function main() {
-  const [deployer] = await ethers.getSigners();
+  const signers     = await ethers.getSigners();
   const networkName = hre.network.name;
   const netConfig   = NETWORK_CONFIG[networkName] || { rpcUrl: "", chainId: 0 };
 
+  if (!signers.length || !signers[0]) {
+    throw new Error("Aucun signer — vérifie DEPLOYER_PRIVATE_KEY dans .env");
+  }
+  const deployer = signers[0];
+
   console.log("\n🚀 Démarrage du déploiement complet et liaison...");
   console.log(`Réseau   : ${networkName} (chainId ${netConfig.chainId})`);
-  console.log(`Deployer : ${deployer.address}\n`);
+  console.log(`Deployer : ${deployer.address}`);
+  const balance = await ethers.provider.getBalance(deployer.address);
+  console.log(`Balance  : ${ethers.formatEther(balance)} ETH\n`);
+  if (balance === 0n) throw new Error("Balance 0 — approvisionne le wallet deployer");
 
   // 1. Déploiement IdentityRegistry
   const Identity = await ethers.getContractFactory("IdentityRegistry");

@@ -1135,8 +1135,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\ValidationRegistry.sol": {
-      "lastModificationDate": 1778933609817,
-      "contentHash": "4a91e190d577418d587748be6b9cea18",
+      "lastModificationDate": 1779652005920,
+      "contentHash": "528dcd3bfe73e35edad24632e72aa38a",
       "sourceName": "contracts/ValidationRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",

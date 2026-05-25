@@ -195,6 +195,14 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     mapping(string  => mapping(string => JudgeCommit))    private _commits;
     mapping(string  => string)                            private _judgeActiveTask;
 
+    // ── Score moyen des agents (on-chain, remplace EigenTrust sync) ──────────
+    mapping(string  => uint256) private _agentTotalScore;
+    mapping(string  => uint256) private _agentScoreCount;
+
+    // ── Taux d'accord des juges (on-chain) ───────────────────────────────────
+    mapping(address => uint256) public judgeAgreements;
+    mapping(address => uint256) public judgeTotalVotes;
+
     // ERC-8004 stockage
     mapping(bytes32 => ValidationRecord)   private _validationRecords;
     // agentId (tokenId) → requestHashes[]
@@ -259,6 +267,18 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         string  taskId,
         uint8   score,   // score agrégé 0-100
         uint8   mode     // 0 = solo, 1 = pipeline
+    );
+
+    event AgentScoreUpdated(
+        string  indexed agentId,
+        uint256         averageScore,  // moyenne cumulée 0-100
+        uint256         totalTasks
+    );
+
+    event JudgeScoreUpdated(
+        address indexed judgeWallet,
+        uint256         agreementRate, // 0-100
+        uint256         totalVotes
     );
 
     // ── Errors ───────────────────────────────────────────────────────────────
@@ -697,6 +717,12 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
 
         emit ScoreRecorded(t.providerAgentId, taskId_, uint8(aggregatedScore), t.mode);
 
+        // Mise à jour score moyen on-chain
+        _agentTotalScore[t.providerAgentId] += aggregatedScore;
+        _agentScoreCount[t.providerAgentId] += 1;
+        uint256 avg = _agentTotalScore[t.providerAgentId] / _agentScoreCount[t.providerAgentId];
+        emit AgentScoreUpdated(t.providerAgentId, avg, _agentScoreCount[t.providerAgentId]);
+
         // ── ERC-8004 : enregistrer la réponse ────────────────────────────────
         _recordValidationResponse(
             t.requestHash,
@@ -933,6 +959,20 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         external view returns (bool)
     { return _isEligibleJudge(judgeId_); }
 
+    function getAgentScore(string calldata agentId_)
+        external view returns (uint256 averageScore, uint256 totalTasks)
+    {
+        totalTasks   = _agentScoreCount[agentId_];
+        averageScore = totalTasks > 0 ? _agentTotalScore[agentId_] / totalTasks : 0;
+    }
+
+    function getJudgeAgreementRate(address judgeWallet_)
+        external view returns (uint256 rate, uint256 totalVotes)
+    {
+        totalVotes = judgeTotalVotes[judgeWallet_];
+        rate       = totalVotes > 0 ? (judgeAgreements[judgeWallet_] * 100) / totalVotes : 50;
+    }
+
     // ── Internals ────────────────────────────────────────────────────────────
 
     function _getTask(string memory taskId_)
@@ -1064,6 +1104,7 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
                     reputationRegistry.recordReputation(
                         jid, REP_JUDGE_CONSENSUS, true, "CONSENSUS"
                     );
+                    judgeAgreements[jwallet]++;
                 } else {
                     uint256 amt = stakingContract.slashJudge(jwallet);
                     emit JudgeSlashed(jid, jwallet, amt, "DEVIATED");
@@ -1071,6 +1112,9 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
                         jid, REP_JUDGE_DEVIATED, false, "DEVIATED"
                     );
                 }
+                judgeTotalVotes[jwallet]++;
+                uint256 rate = (judgeAgreements[jwallet] * 100) / judgeTotalVotes[jwallet];
+                emit JudgeScoreUpdated(jwallet, rate, judgeTotalVotes[jwallet]);
             }
         }
     }
