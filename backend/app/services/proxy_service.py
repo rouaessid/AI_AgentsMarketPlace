@@ -470,7 +470,6 @@ class ProxyService:
         trace_json = json.dumps(self._trace.to_dict(), sort_keys=True, ensure_ascii=False)
         self._trace.proxy_hash = "0x" + hashlib.sha256(trace_json.encode()).hexdigest()
 
-        self._save()
         logger.info(
             "ProxyTrace: tokens=%d cost=$%.4f errors=%d tools=%s categories=%s llm=%d search=%d",
             self._trace.total_tokens, self._trace.total_cost_usd,
@@ -479,19 +478,6 @@ class ProxyService:
             self._trace.llm_calls, self._trace.search_calls,
         )
         return self._trace
-
-    def _save(self) -> None:
-        try:
-            out = self.storage_path / "proxy_traces"
-            out.mkdir(parents=True, exist_ok=True)
-            path = out / f"{self.run_id}.json"
-            path.write_text(
-                json.dumps(self._trace.to_dict(), indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            logger.info("ProxyTrace saved: %s", path)
-        except Exception as e:
-            logger.warning("Save ProxyTrace: %s", e)
 
     @property
     def port(self) -> int:

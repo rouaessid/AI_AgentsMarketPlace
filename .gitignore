@@ -89,3 +89,9 @@ yarn-error.log*
 htmlcov/
 .pytest_cache/
 .tox/
+
+# Claude Code local settings
+.claude/
+
+# Root-level fix/debug scripts (not part of the project)
+/*.py

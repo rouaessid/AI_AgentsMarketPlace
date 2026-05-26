@@ -25,7 +25,7 @@ from typing import Optional
 
 import numpy as np
 
-from app.db.database import get_connection
+from app.db.database import AgentEmbedding, get_session
 from app.services.planner_service import SubTask
 
 logger = logging.getLogger(__name__)
@@ -125,15 +125,13 @@ def embed_agent_capabilities(agent_id: str, identity_metadata: dict) -> list[flo
         logger.warning("embed_agent_capabilities: texte vide pour agent %s", agent_id)
         return []
     vec = compute_embedding(text)
-    conn = get_connection()
-    try:
-        conn.execute(
-            "UPDATE agents SET capability_embedding = ? WHERE agent_id = ?",
-            (json.dumps(vec), agent_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    with get_session() as session:
+        row = session.get(AgentEmbedding, agent_id)
+        if row:
+            row.capability_embedding = json.dumps(vec)
+        else:
+            session.add(AgentEmbedding(agent_id=agent_id, capability_embedding=json.dumps(vec)))
+        session.commit()
     logger.info("Embedding stocké pour agent %s (dim=%d)", agent_id, len(vec))
     return vec
 
@@ -142,66 +140,51 @@ def embed_agent_capabilities(agent_id: str, identity_metadata: dict) -> list[flo
 
 def _load_judges_with_embeddings() -> list[dict]:
     """Retourne tous les juges actifs avec leur embedding depuis DB."""
-    conn = get_connection()
-    try:
-        rows = conn.execute(
-            """
-            SELECT agent_id, identity_metadata, capability_embedding
-            FROM agents
-            WHERE status = 'active' AND agent_type = 1
-            """
-        ).fetchall()
+    from app.services.agent_service import get_agent_from_cache
+    with get_session() as session:
+        rows = session.query(AgentEmbedding).all()
         judges = []
         for row in rows:
-            emb_raw = row["capability_embedding"]
-            if not emb_raw:
+            cached = get_agent_from_cache(row.agent_id)
+            if not cached or cached.get("agent_type") != 1:
+                continue
+            if cached.get("status") != "active":
+                continue
+            if not row.capability_embedding:
                 continue
             try:
-                emb = json.loads(emb_raw)
+                emb = json.loads(row.capability_embedding)
             except Exception:
                 continue
-            judges.append({
-                "agent_id":  row["agent_id"],
-                "embedding": emb,
-            })
+            judges.append({"agent_id": row.agent_id, "embedding": emb})
         return judges
-    finally:
-        conn.close()
 
 
 def _load_agents_with_embeddings() -> list[dict]:
     """Retourne tous les agents actifs providers avec leur embedding depuis DB."""
-    conn = get_connection()
-    try:
-        rows = conn.execute(
-            """
-            SELECT agent_id, identity_metadata, capability_embedding
-            FROM agents
-            WHERE status = 'active' AND agent_type != 1
-            """
-        ).fetchall()
+    from app.services.agent_service import get_agent_from_cache
+    with get_session() as session:
+        rows = session.query(AgentEmbedding).all()
         agents = []
         for row in rows:
-            emb_raw = row["capability_embedding"]
-            if not emb_raw:
+            cached = get_agent_from_cache(row.agent_id)
+            if not cached or cached.get("agent_type") == 1:
+                continue
+            if cached.get("status") != "active":
+                continue
+            if not row.capability_embedding:
                 continue
             try:
-                emb = json.loads(emb_raw)
+                emb = json.loads(row.capability_embedding)
             except Exception:
                 continue
-            meta_raw = row["identity_metadata"] or "{}"
+            meta_raw = cached.get("identity_metadata") or "{}"
             try:
                 meta = json.loads(meta_raw) if isinstance(meta_raw, str) else {}
             except Exception:
                 meta = {}
-            agents.append({
-                "agent_id":  row["agent_id"],
-                "embedding": emb,
-                "metadata":  meta,
-            })
+            agents.append({"agent_id": row.agent_id, "embedding": emb, "metadata": meta})
         return agents
-    finally:
-        conn.close()
 
 
 # ── Dataclass résultat matching ───────────────────────────────────────────────

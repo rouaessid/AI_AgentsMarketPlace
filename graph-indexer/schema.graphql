@@ -1,0 +1,125 @@
+# ── Helper ───────────────────────────────────────────────────────────────────
+# Resolves indexed-string agentId (stored as keccak256 hash) back to the
+# original string. Populated on AgentCreated (where agentId is non-indexed).
+type AgentHashLookup @entity(immutable: false) {
+  id: Bytes!      # keccak256(agentId)
+  agentId: String!
+}
+
+# ── Identity ─────────────────────────────────────────────────────────────────
+
+type Agent @entity(immutable: false) {
+  id: String!           # agentId string
+  tokenId: BigInt!
+  owner: Bytes!
+  agentType: Int!
+  agentURI: String!
+  version: String!
+  status: Int!          # 0=Active 1=Suspended 2=Deprecated
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Escrow ───────────────────────────────────────────────────────────────────
+
+type EscrowEvent @entity(immutable: true) {
+  id: Bytes!
+  taskId: Bytes!   # keccak256 hash — taskId is indexed string in all EscrowManager events
+  eventType: String!        # PaymentDeposited | PipelinePaymentDeposited | FundsReleased | ClientRefunded
+  participant: Bytes!       # client or provider address
+  amount: BigInt!
+  participantCount: BigInt  # only for PipelinePaymentDeposited
+  providerAmount: BigInt    # only for FundsReleased
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Validation ───────────────────────────────────────────────────────────────
+
+type ValidationEvent @entity(immutable: true) {
+  id: Bytes!
+  agentId: String!
+  taskId: String!
+  score: Int!
+  mode: Int!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type AgentScore @entity(immutable: false) {
+  id: String!           # agentId
+  averageScore: BigInt!
+  totalTasks: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type JudgeScore @entity(immutable: false) {
+  id: Bytes!            # judgeWallet address
+  agreementRate: BigInt!
+  totalVotes: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type ValidationRequestEvent @entity(immutable: true) {
+  id: Bytes!
+  validatorAddress: Bytes!
+  agentTokenId: BigInt!
+  requestURI: String!
+  requestHash: Bytes!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type ValidationResponseEvent @entity(immutable: true) {
+  id: Bytes!
+  validatorAddress: Bytes!
+  agentTokenId: BigInt!
+  requestHash: Bytes!
+  response: Int!
+  responseURI: String!
+  responseHash: Bytes!
+  tag: String!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Staking ──────────────────────────────────────────────────────────────────
+
+type StakeEvent @entity(immutable: true) {
+  id: Bytes!
+  agent: Bytes!
+  amount: BigInt!
+  eventType: String!    # Staked | Unstaked | Slashed
+  reason: String        # only for Slashed
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Reputation ───────────────────────────────────────────────────────────────
+
+type ReputationEvent @entity(immutable: true) {
+  id: Bytes!
+  agentId: BigInt!
+  clientAddress: Bytes!
+  feedbackIndex: BigInt!
+  value: BigInt!
+  valueDecimals: Int!
+  tag1: String!
+  tag2: String!
+  endpoint: String!
+  feedbackURI: String!
+  feedbackHash: Bytes!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}

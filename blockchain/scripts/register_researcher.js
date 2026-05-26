@@ -27,12 +27,12 @@ const fs   = require("fs");
 const path = require("path");
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const RPC     = "http://127.0.0.1:8545";
+const RPC     = "https://sepolia.base.org";
 const BACKEND = "http://localhost:8000";
 
 // Hardhat account #0 — deployer — owner of researcher-01
 // Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-const OWNER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const OWNER_KEY = "0x7e20a7961bc4789d5b485451ff83a1201295e4951152737c0bfc8c5ba5aaceb3";
 
 const STAKE_ETH = "0.002";
 

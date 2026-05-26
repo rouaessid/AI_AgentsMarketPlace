@@ -175,6 +175,14 @@ export default function AgentDetail() {
     try {
       if (!window.ethereum) throw new Error('MetaMask not detected')
 
+      // Ensure MetaMask uses a reliable RPC for Base Sepolia
+      await window.ethereum.request({
+        method: 'wallet_addEthereumChain',
+        params: [{ chainId: '0x14A34', chainName: 'Base Sepolia',
+          rpcUrls: ['https://base-sepolia-rpc.publicnode.com', 'https://sepolia.base.org'],
+          nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 } }],
+      }).catch(() => {})
+
       const priceWei = BigInt(purchaseInfo.required_wei)
 
       // Send MetaMask tx to EscrowManager.depositPayment()
@@ -208,9 +216,9 @@ export default function AgentDetail() {
     }
   }
 
-  async function waitForReceipt(txHash, maxRetries = 30) {
+  async function waitForReceipt(txHash, maxRetries = 20) {
     for (let i = 0; i < maxRetries; i++) {
-      await new Promise(r => setTimeout(r, 2000))
+      await new Promise(r => setTimeout(r, 5000))
       const receipt = await window.ethereum.request({
         method: 'eth_getTransactionReceipt',
         params: [txHash],
@@ -218,7 +226,7 @@ export default function AgentDetail() {
       if (receipt && receipt.status === '0x1') return receipt
       if (receipt && receipt.status === '0x0') throw new Error('Transaction reverted')
     }
-    throw new Error('Transaction not confirmed after 60s')
+    throw new Error('Transaction not confirmed after 100s')
   }
 
   // ─────────────────────────────────────────────────────────────────────────

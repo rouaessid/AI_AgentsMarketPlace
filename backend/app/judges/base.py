@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -57,40 +56,25 @@ class TraceData:
     trajectory:      list[dict[str, Any]]   # full call list
 
 
-async def load_trace(proxy_cid: str, storage_path: str) -> TraceData:
-    """
-    Load proxy trace from local IPFS store or Pinata gateway.
-    Returns a TraceData.  Raises RuntimeError if unreachable.
-    """
-    raw = await _fetch_raw(proxy_cid, storage_path)
+async def load_trace(proxy_cid: str) -> TraceData:
+    """Fetch proxy trace from Pinata. Raises RuntimeError if unreachable."""
+    raw = await _fetch_raw(proxy_cid)
     return _parse(raw)
 
 
-async def _fetch_raw(cid: str, storage_path: str) -> dict:
-    # Local (QmLOCAL… or any CID with a local file present)
-    local = Path(storage_path) / "ipfs_local" / f"{cid}.json"
-    if local.exists():
-        return json.loads(local.read_text(encoding="utf-8"))
-
-    # Also check proxy_traces folder (saved by ProxyService._save)
-    # cid here might actually be a run_id path in edge cases
-    traces_dir = Path(storage_path) / "proxy_traces"
-    for candidate in traces_dir.glob("*.json"):
+async def _fetch_raw(cid: str) -> dict:
+    for url in [
+        f"https://gateway.pinata.cloud/ipfs/{cid}",
+        f"https://ipfs.io/ipfs/{cid}",
+    ]:
         try:
-            data = json.loads(candidate.read_text(encoding="utf-8"))
-            if data.get("run_id") and cid.endswith(data["run_id"][:8]):
-                return data
-        except Exception:
-            continue
-
-    # Real IPFS via gateway
-    from app.core.config import get_settings
-    settings = get_settings()
-    url = f"{settings.ipfs_gateway}/{cid}"
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.json()
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception as e:
+            logger.debug("Gateway %s failed: %s", url, e)
+    raise RuntimeError(f"Trace not found on IPFS for CID={cid}")
 
 
 def _parse(raw: dict) -> TraceData:

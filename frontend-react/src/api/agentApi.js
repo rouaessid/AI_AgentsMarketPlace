@@ -52,6 +52,8 @@ export const agentApi = {
   confirm: (body) =>
     fetchJSON(`${BASE}/confirm`, { method: 'POST', body: JSON.stringify(body) }),
 
+  status: (agentId) => fetchJSON(`${BASE}/${agentId}/status`),
+
   // Editorial changes (description, readme, price) — no blockchain tx
   editAgent: (agentId, body) =>
     fetchJSON(`${BASE}/${agentId}`, { method: 'PATCH', body: JSON.stringify(body) }),
@@ -80,7 +82,7 @@ export const agentApi = {
     fetchJSON(`${BASE}/${agentId}/purchase-info`),
 
   purchase: (agentId, body) =>
-    fetchJSON(`${BASE}/${agentId}/purchase`, { method: 'POST', body: JSON.stringify(body) }),
+    fetchJSON(`${BASE}/${agentId}/grant-access`, { method: 'POST', body: JSON.stringify(body) }),
 
   checkAccess: (agentId, buyerWallet) =>
     fetchJSON(`${BASE}/${agentId}/access?buyer_wallet=${encodeURIComponent(buyerWallet)}`),

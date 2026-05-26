@@ -63,7 +63,7 @@ async def _run_planner_and_matching(prompt: str):
     try:
         from app.services.eigentrust_service import compute_eigentrust
         from app.db.identity_repo import get_all_agent_identities
-        from app.db.collaboration_repo import get_solo_scores, get_pipeline_scores
+        from app.services.graph_client import get_solo_scores, get_pipeline_scores
 
         all_ids = get_all_agent_identities()
         agents  = [
@@ -571,7 +571,7 @@ async def pack_proposals(body: PackProposalsRequest) -> JSONResponse:
     try:
         from app.services.eigentrust_service import compute_eigentrust
         from app.db.identity_repo import get_all_agent_identities
-        from app.db.collaboration_repo import get_solo_scores, get_pipeline_scores
+        from app.services.graph_client import get_solo_scores, get_pipeline_scores
 
         all_ids = get_all_agent_identities()
         agents  = [
@@ -673,10 +673,10 @@ async def confirm_pack_access(task_id: str, body: ConfirmAccessRequest) -> JSONR
     if task.get("buyer_wallet", "").lower() != body.buyer_wallet.lower():
         raise HTTPException(403, detail="Wallet mismatch")
 
-    # Verify pipeline payment exists on-chain before granting access
-    from app.db.escrow_repo import get_escrow_events_for_task
-    onchain = get_escrow_events_for_task(task_id)
-    if not any(e["event_type"] == "pipeline_deposited" for e in onchain):
+    # Verify pipeline payment exists on-chain via The Graph
+    from app.services.graph_client import get_escrow_events_for_task as _graph_escrow
+    onchain = _graph_escrow(task_id)
+    if not any(e.get("eventType") == "PipelinePaymentDeposited" for e in onchain):
         raise HTTPException(402, detail="Paiement pipeline non trouvé on-chain — attendez la confirmation du bloc")
 
     from app.core.config import get_settings
@@ -809,7 +809,7 @@ async def get_alternatives(body: AlternativesRequest) -> JSONResponse:
         )
         from app.services.eigentrust_service import compute_eigentrust
         from app.db.identity_repo import get_all_agent_identities, get_agent_identity
-        from app.db.collaboration_repo import get_solo_scores, get_pipeline_scores
+        from app.services.graph_client import get_solo_scores, get_pipeline_scores
 
         all_ids = get_all_agent_identities()
         agents  = [

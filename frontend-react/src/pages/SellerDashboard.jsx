@@ -315,17 +315,48 @@ function NewVersionModal({ agent, onClose }) {
     if (!form.new_version)  return setError('Version requise (ex: 2.0.0)')
     if (!/^\d+\.\d+\.\d+$/.test(form.new_version)) return setError('Format invalide — ex: 2.0.0')
     if (!form.docker_image) return setError('Image Docker requise (ex: myagent:v2)')
+    if (!window.ethereum) return setError('MetaMask non détecté.')
     setSubmitting(true)
     setError('')
     try {
+      // Step 1 — IPFS upload + build unsigned tx
       const res = await agentApi.newVersion(agent.agent_id, {
         agent_id:     agent.agent_id,
         new_version:  form.new_version,
         docker_image: form.docker_image,
       })
-      setTxHash(res.tx_hash || 'submitted')
+
+      // Step 2 — Switch to Base Sepolia and sign mintNewVersion() with MetaMask
+      if (res.unsigned_tx?.data) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0x14A34' }],
+          })
+        } catch (sw) {
+          if (sw.code === 4902) {
+            await window.ethereum.request({
+              method: 'wallet_addEthereumChain',
+              params: [{ chainId: '0x14A34', chainName: 'Base Sepolia',
+                rpcUrls: ['https://base-sepolia-rpc.publicnode.com', 'https://sepolia.base.org'],
+                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 } }],
+            })
+          }
+        }
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' })
+        const from = accounts[0]
+        if (!from) throw new Error('Aucun compte connecté dans MetaMask.')
+        const gasHex = '0x' + res.unsigned_tx.estimated_gas.toString(16)
+        const txHash = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{ from, to: res.unsigned_tx.contract_address, data: res.unsigned_tx.data, gas: gasHex }],
+        })
+        setTxHash(txHash)
+      } else {
+        setTxHash(res.tx_hash || 'submitted')
+      }
     } catch (e) {
-      setError(e.message || 'Erreur lors de la soumission')
+      if (e.code !== 4001) setError(e.message || 'Erreur lors de la soumission')
     } finally {
       setSubmitting(false)
     }
@@ -418,10 +449,21 @@ function AgentRow({ agent, index }) {
       const utx = data.unsigned_tx
       if (!utx?.data) throw new Error('Backend did not return unsigned_tx.data')
 
-      await window.ethereum.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: '0x7A69' }],
-      }).catch(() => {})
+      try {
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x14A34' }],
+        })
+      } catch (sw) {
+        if (sw.code === 4902) {
+          await window.ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{ chainId: '0x14A34', chainName: 'Base Sepolia',
+              rpcUrls: ['https://base-sepolia-rpc.publicnode.com', 'https://sepolia.base.org'],
+              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 } }],
+          })
+        }
+      }
 
       const txHash = await window.ethereum.request({
         method: 'eth_sendTransaction',

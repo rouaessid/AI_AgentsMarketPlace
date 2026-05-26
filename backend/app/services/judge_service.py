@@ -23,7 +23,6 @@ import json
 import logging
 import secrets
 import uuid
-from pathlib import Path
 from datetime import datetime, timezone
 
 from eth_abi import encode as abi_encode
@@ -39,6 +38,11 @@ settings = get_settings()
 # Limit simultaneous judge Docker containers: 2 agents × 3 judges = 6 slots.
 # Prevents Docker resource spikes while keeping multi-agent pipelines fast.
 _JUDGE_SEMAPHORE = asyncio.Semaphore(6)
+
+# Maps IPFS CID → challenge_token for the current validation round.
+# The /ipfs/{cid} proxy in main.py injects the token into the response
+# so judges receive it without us needing to re-upload to IPFS.
+_CHALLENGE_STORE: dict[str, str] = {}
 
 
 def _judge_env(agent_id: str) -> dict:
@@ -87,33 +91,27 @@ def _judge_env(agent_id: str) -> dict:
 
 # ── Protocol helpers — plateforme side ───────────────────────────────────────
 
-def _load_trace_local(proxy_cid: str) -> dict:
-    """Lit la trace depuis le stockage local IPFS."""
-    base = Path(settings.storage_path) / "ipfs_local"
-    f = base / f"{proxy_cid}.json"
-    if f.exists():
-        return json.loads(f.read_text(encoding="utf-8"))
-    # fallback proxy_traces
-    traces_dir = Path(settings.storage_path) / "proxy_traces"
-    if traces_dir.exists():
-        for candidate in traces_dir.glob("*.json"):
-            try:
-                data = json.loads(candidate.read_text(encoding="utf-8"))
-                if data.get("run_id") and proxy_cid.endswith(data["run_id"][:8]):
-                    return data
-            except Exception:
-                continue
-    logger.warning("[val] Trace introuvable pour CID=%s", proxy_cid)
+def _load_trace_ipfs(proxy_cid: str) -> dict:
+    """Fetch trace from Pinata (primary) or ipfs.io (fallback gateway)."""
+    import httpx as _httpx
+    for url in [
+        f"https://gateway.pinata.cloud/ipfs/{proxy_cid}",
+        f"https://ipfs.io/ipfs/{proxy_cid}",
+    ]:
+        try:
+            r = _httpx.get(url, timeout=20, follow_redirects=True)
+            if r.status_code == 200:
+                return r.json()
+        except Exception as _e:
+            logger.debug("[val] Gateway %s failed: %s", url, _e)
+    logger.warning("[val] Trace introuvable sur IPFS pour CID=%s", proxy_cid)
     return {}
 
 
-def _embed_challenge_in_trace(proxy_cid: str, trace: dict, token: str) -> None:
-    """Injecte le challenge_token dans le fichier trace en place."""
+def _register_challenge_token(proxy_cid: str, trace: dict, token: str) -> None:
+    """Store challenge token in memory so /ipfs/{cid} proxy injects it for judges."""
     trace["challenge_token"] = token
-    base = Path(settings.storage_path) / "ipfs_local"
-    f = base / f"{proxy_cid}.json"
-    if f.exists():
-        f.write_text(json.dumps(trace, ensure_ascii=False), encoding="utf-8")
+    _CHALLENGE_STORE[proxy_cid] = token
 
 
 def _verify_challenge_token(response_token: str, expected_token: str) -> bool:
@@ -217,9 +215,9 @@ async def _run_validation_inner(
     task_description: str,
 ) -> None:
     # ── 1. Protocole de vérification ─────────────────────────────────────
-    real_trace      = _load_trace_local(proxy_cid)
+    real_trace      = _load_trace_ipfs(proxy_cid)
     challenge_token = secrets.token_hex(8)
-    _embed_challenge_in_trace(proxy_cid, real_trace, challenge_token)
+    _register_challenge_token(proxy_cid, real_trace, challenge_token)
     # traceHash committed on-chain before judges run — prevents post-hoc trace manipulation
     trace_bytes = json.dumps(real_trace, ensure_ascii=False, sort_keys=True).encode()
     trace_hash  = bytes(Web3.keccak(trace_bytes))  # bytes32
@@ -285,6 +283,7 @@ async def _run_validation_inner(
     await _onchain_flow(agent_id, val_task_id, proxy_cid, results, mode, selected_judges, trace_hash)
 
     # ── 5. Persist final result ───────────────────────────────────────────
+    _CHALLENGE_STORE.pop(proxy_cid, None)
     final_status = "validated" if consensus == "VALID" else "rejected"
     access_repo.upsert_validation_session(
         agent_id,
@@ -307,33 +306,12 @@ async def _run_validation_inner(
     except Exception as e:
         logger.warning("[val] Could not update agent reputation metrics: %s", e)
 
-    # ── 7. Update judge agreement rates (DB + on-chain background) ───────
+    # ── 7. Update judge agreement rates (DB) ─────────────────────────────
+    # JudgeScoreUpdated est émis on-chain par ValidationRegistry._applyOutcomes()
     _update_judge_agreements(results, consensus)
-    asyncio.get_event_loop().run_in_executor(
-        None, _emit_judge_accuracies_onchain, results
-    )
 
     logger.info("[val] DONE agent=%s → %s", agent_id, final_status)
 
-
-# ── Minimal ReputationRegistry ABI for giveFeedback ──────────────────────────
-
-_REPUTATION_ABI = [{
-    "inputs": [
-        {"internalType": "uint256", "name": "agentId",       "type": "uint256"},
-        {"internalType": "int128",  "name": "value",         "type": "int128"},
-        {"internalType": "uint8",   "name": "valueDecimals", "type": "uint8"},
-        {"internalType": "string",  "name": "tag1",          "type": "string"},
-        {"internalType": "string",  "name": "tag2",          "type": "string"},
-        {"internalType": "string",  "name": "endpoint",      "type": "string"},
-        {"internalType": "string",  "name": "feedbackURI",   "type": "string"},
-        {"internalType": "bytes32", "name": "feedbackHash",  "type": "bytes32"},
-    ],
-    "name": "giveFeedback",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function",
-}]
 
 _COSINE_W = 0.7
 _REP_W    = 0.3
@@ -402,10 +380,13 @@ def _select_judges_for_task(task_description: str, registered: list) -> list:
     agreement_rate ∈ [0,1] — 0.5 par défaut (neutre) avant la 1ère validation.
     """
     from app.services.matching_service import compute_embedding, cosine_similarity, _load_judges_with_embeddings
-    from app.db.judge_reputation_repo import get_all_reputations
+    from app.services.graph_client import get_judge_reputation
 
-    emb_map = {j["agent_id"]: j["embedding"] for j in _load_judges_with_embeddings()}
-    rep_map = {r["judge_id"]: r["agreement_rate"] for r in get_all_reputations()}
+    judges_with_emb = _load_judges_with_embeddings()
+    emb_map = {j["agent_id"]: j["embedding"] for j in judges_with_emb}
+    # agreement_rate from The Graph JudgeScore (calculated on-chain by ValidationRegistry)
+    rep_map = {j["agent_id"]: get_judge_reputation(j["agent_id"])["agreement_rate"]
+               for j in judges_with_emb}
 
     task_emb = compute_embedding(task_description) if task_description.strip() else None
 
@@ -437,51 +418,14 @@ def _select_judges_for_task(task_description: str, registered: list) -> list:
 # ── Mise à jour réputation juges après consensus ──────────────────────────────
 
 def _update_judge_agreements(results: list[JudgeResult], consensus: str) -> None:
-    """Met à jour le taux d'accord de chaque juge en DB."""
-    from app.db.judge_reputation_repo import update_judge_agreement
+    """
+    Agreement rates are calculated on-chain by ValidationRegistry._applyOutcomes()
+    and indexed by The Graph (JudgeScore entity). No local DB update needed.
+    """
     for r in results:
         agreed = (r.verdict == consensus)
-        new_rate = update_judge_agreement(r.judge_id, agreed)
-        logger.info("[val] Judge %s agreement_rate=%.2f (agreed=%s)",
-                    r.judge_id, new_rate, agreed)
-
-
-def _emit_judge_accuracies_onchain(results: list[JudgeResult]) -> None:
-    """
-    Émet giveFeedback(tag1="judgeAccuracy") sur ReputationRegistry pour chaque juge.
-    value = agreement_rate × 100  ∈ [0, 100].
-    """
-    if not (settings.reputation_registry_address and settings.platform_private_key):
-        logger.debug("[val] On-chain judge accuracy disabled (missing config)")
-        return
-
-    from app.db.identity_repo import get_agent_identity
-    from app.db.judge_reputation_repo import get_judge_reputation
-
-    try:
-        w3  = Web3(Web3.HTTPProvider(settings.rpc_url))
-        rep = w3.eth.contract(
-            address=Web3.to_checksum_address(settings.reputation_registry_address),
-            abi=_REPUTATION_ABI,
-        )
-        for r in results:
-            identity = get_agent_identity(r.judge_id)
-            if not identity or not identity.get("current_token_id"):
-                logger.debug("[val] Judge %s has no token_id — skip on-chain accuracy", r.judge_id)
-                continue
-            token_id      = int(identity["current_token_id"])
-            rep_data      = get_judge_reputation(r.judge_id)
-            accuracy_val  = int(rep_data["agreement_rate"] * 100)
-            _send(w3, settings.platform_private_key,
-                  rep.functions.giveFeedback(
-                      token_id, accuracy_val, 0,
-                      "judgeAccuracy", r.judge_id,
-                      "", "", b"\x00" * 32,
-                  ))
-            logger.info("[val] On-chain judgeAccuracy: judge=%s value=%d",
-                        r.judge_id, accuracy_val)
-    except Exception as exc:
-        logger.warning("[val] _emit_judge_accuracies_onchain failed (non-bloquant): %s", exc)
+        logger.info("[val] Judge %s voted=%s consensus=%s agreed=%s (rate from The Graph)",
+                    r.judge_id, r.verdict, consensus, agreed)
 
 
 def _get_registered_judges() -> list:
@@ -718,14 +662,22 @@ async def _onchain_flow(
 
 
 def _resolve_judge_keys(identity, judge_ids: list[str], wallet_key_map: dict) -> list[str]:
-    """Return private keys for each judge, looked up via their on-chain wallet address."""
+    """Return private keys for each judge using owner_address from in-memory cache."""
+    from app.services.agent_service import get_agent_from_cache
     keys = []
     for jid in judge_ids:
-        wallet = identity.functions.getAgentWallet(jid).call().lower()
+        cached = get_agent_from_cache(jid)
+        wallet = (cached.get("owner_address") or "").lower() if cached else ""
+        if not wallet:
+            # fallback: ask the contract
+            try:
+                wallet = identity.functions.getAgentWallet(jid).call().lower()
+            except Exception:
+                pass
         key = wallet_key_map.get(wallet)
         if not key:
             raise RuntimeError(
-                f"No private key configured for judge {jid} wallet ({wallet}). "
+                f"No private key for judge {jid} (owner={wallet}). "
                 f"Add JUDGE_WALLET_KEYS={{'{wallet}':'0xKEY'}} to .env"
             )
         keys.append(key)
@@ -775,8 +727,6 @@ def _onchain_flow_sync(
         )
         wallet_key_map = _build_wallet_key_map()
         judge_keys = _resolve_judge_keys(identity, judge_ids, wallet_key_map)
-
-        _ensure_local_dev_judge_funding(w3, settings.platform_private_key, judge_keys)
 
         result_map = {r.judge_id: r for r in results}
         valid_count = sum(1 for r in results if r.verdict == "VALID")
@@ -843,49 +793,3 @@ def _send(w3: Web3, private_key: str, fn, gas: int = 500_000) -> str:
     return txh.hex()
 
 
-def _ensure_local_dev_judge_funding(
-    w3: Web3,
-    platform_private_key: str,
-    judge_keys: list[str],
-    min_balance_wei: int | None = None,
-) -> None:
-    if not _is_local_dev_chain(w3):
-        return
-
-    min_balance_wei = min_balance_wei or w3.to_wei(0.02, "ether")
-    for key in judge_keys:
-        judge = w3.eth.account.from_key(key)
-        balance = w3.eth.get_balance(judge.address)
-        if balance >= min_balance_wei:
-            continue
-        top_up = min_balance_wei - balance
-        logger.warning("[val] Auto-funding local judge wallet %s with %s wei",
-                       judge.address, top_up)
-        _send_eth(w3, platform_private_key, judge.address, top_up)
-
-
-def _is_local_dev_chain(w3: Web3) -> bool:
-    endpoint = (settings.rpc_url or "").lower()
-    return w3.eth.chain_id == settings.chain_id == 31337 and (
-        "127.0.0.1" in endpoint or "localhost" in endpoint
-    )
-
-
-def _send_eth(w3: Web3, private_key: str, to_address: str, value_wei: int) -> str:
-    account = w3.eth.account.from_key(private_key)
-    nonce   = w3.eth.get_transaction_count(account.address, "pending")
-    tx      = {
-        "from": account.address,
-        "to": Web3.to_checksum_address(to_address),
-        "value": value_wei,
-        "nonce": nonce,
-        "chainId": w3.eth.chain_id,
-        "gas": 21_000,
-        "gasPrice": w3.eth.gas_price,
-    }
-    signed  = w3.eth.account.sign_transaction(tx, private_key)
-    txh     = w3.eth.send_raw_transaction(signed.raw_transaction)
-    receipt = w3.eth.wait_for_transaction_receipt(txh, timeout=60)
-    if receipt["status"] != 1:
-        raise RuntimeError(f"Funding TX reverted: {txh.hex()}")
-    return txh.hex()

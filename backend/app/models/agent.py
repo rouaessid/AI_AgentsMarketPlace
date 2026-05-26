@@ -19,6 +19,7 @@ class AgentStatus(str, Enum):
     SUSPENDED         = "suspended"
     REVOKED           = "revoked"
     PENDING_SIGNATURE = "pending_signature"
+    PENDING_INDEX     = "pending_index"
 
 
 class ServiceEndpoint(BaseModel):

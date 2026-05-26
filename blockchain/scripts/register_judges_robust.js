@@ -11,12 +11,12 @@ const fs   = require("fs");
 const path = require("path");
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const RPC     = "http://127.0.0.1:8545";
+const RPC     = "https://sepolia.base.org";
 const BACKEND = "http://localhost:8000";
 
 const JUDGES = [
   {
-    private_key: "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6", // Account #3
+    private_key: "0x8900abaabf0051608e714523caeed0edc096e304666123905bc96ff7df51b3c7", // 0xbB5385...
     agent_id:    "judge-alpha",
     name:        "Judge Alpha",
     description: "Independent AI judge. Evaluates agent execution traces using Groq (Llama-3.3-70b) with optional Tavily fact-checking. Returns a structured verdict (score 0-100, VALID/INVALID).",
@@ -33,7 +33,7 @@ const JUDGES = [
                  skills: ["evaluation", "fact-checking", "structured-scoring"] }],
   },
   {
-    private_key: "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6", // Account #3
+    private_key: "0x8900abaabf0051608e714523caeed0edc096e304666123905bc96ff7df51b3c7", // 0xbB5385...
     agent_id:    "judge-beta",
     name:        "Judge Beta",
     description: "Independent AI judge using pure LLM reasoning — no external search. Evaluates correctness, completeness, coherence, and hallucinations using Groq (Llama-3.3-70b).",
@@ -50,7 +50,7 @@ const JUDGES = [
                  skills: ["evaluation", "reasoning", "output-analysis"] }],
   },
   {
-    private_key: "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6", // Account #3
+    private_key: "0x8900abaabf0051608e714523caeed0edc096e304666123905bc96ff7df51b3c7", // 0xbB5385...
     agent_id:    "judge-gamma",
     name:        "Judge Gamma",
     description: "Independent AI judge specialised in execution behaviour analysis. Evaluates tool call logic, trajectory coherence, and consistency between process and output.",
@@ -67,7 +67,7 @@ const JUDGES = [
                  skills: ["evaluation", "trace-analysis", "behaviour-auditing"] }],
   },
   {
-    private_key: "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a", // Account #4
+    private_key: "0x8900abaabf0051608e714523caeed0edc096e304666123905bc96ff7df51b3c7", // 0xbB5385... (same as alpha/beta/gamma)
     agent_id:    "judge-delta",
     name:        "Judge Delta",
     description: "Hallucination detection specialist. Extracts factual claims from agent output and cross-checks them against the input context and trajectory. Flags unsupported assertions. Uses Groq (Llama-3.3-70b).",
@@ -84,7 +84,7 @@ const JUDGES = [
                  skills: ["hallucination-detection", "claim-extraction", "fact-grounding", "source-cross-checking"] }],
   },
   {
-    private_key: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a", // Account #2
+    private_key: "0x8900abaabf0051608e714523caeed0edc096e304666123905bc96ff7df51b3c7", // 0xbB5385... (same as alpha/beta/gamma)
     agent_id:    "judge-epsilon",
     name:        "Judge Epsilon",
     description: "Rubric-based evaluation specialist. Scores agent output on a structured grid: relevance, completeness, accuracy, format, and prompt adherence. Each dimension scored 0-25 for a total of 0-100. Uses Groq (Llama-3.3-70b).",
@@ -170,44 +170,77 @@ async function recoverPendingAgent(info, wallet, provider, identityAddr, staking
     return;
   }
 
-  if (retryResp.status === "active") {
-    console.log(`  ✓ ${info.agent_id} is already active — skipping.`);
-    return;
-  }
-
   const registrationId = retryResp.registration_id;
 
   const identityContract = new ethers.Contract(identityAddr, [
     "function getCurrentTokenId(string calldata agentId_) external view returns (uint256)",
-  ], provider);
+    "function register(string calldata agentId_, uint8 agentType_, string calldata agentURI_, string calldata version_, uint256 pricePerTask_) external returns (uint256)",
+  ], wallet);
 
   let tokenId;
   try {
     const raw = await identityContract.getCurrentTokenId(info.agent_id);
     tokenId = Number(BigInt(raw));
   } catch {
-    console.log("  ✗ Judge not found on-chain.");
+    tokenId = null; // not on-chain yet
+  }
+
+  if (retryResp.status === "active" && tokenId) {
+    console.log(`  ✓ ${info.agent_id} is already active on-chain (tokenId=${tokenId}) — skipping.`);
     return;
   }
 
-  const logs = await provider.getLogs({
-    address:   identityAddr,
-    topics:    [AGENT_CREATED_TOPIC],
-    fromBlock: 0,
-    toBlock:   "latest",
-  });
-  const matchLog = logs.find(
-    (l) => l.topics[1] && Number(BigInt(l.topics[1])) === tokenId
-  );
-  if (!matchLog) return;
-  const txHash = matchLog.transactionHash;
+  let registrationTxHash = null;
 
-  console.log("  → POST /api/v1/agents/confirm (recovery) ...");
-  await backendPost("/api/v1/agents/confirm", {
-    registration_id: registrationId,
-    tx_hash:         txHash,
-    token_id:        tokenId,
-  });
+  if (tokenId) {
+    // Already on-chain — find the original tx_hash by querying receipt of the block it was created
+    console.log(`  → On-chain (tokenId=${tokenId}) but not confirmed — finding tx_hash...`);
+    // Paginate getLogs in 1000-block windows near the current block
+    const currentBlock = await provider.getBlockNumber();
+    const step = 1000;
+    let found = null;
+    for (let to = currentBlock; to > 0 && !found; to -= step) {
+      const from = Math.max(0, to - step + 1);
+      try {
+        const logs = await provider.getLogs({
+          address:   identityAddr,
+          topics:    [AGENT_CREATED_TOPIC],
+          fromBlock: from,
+          toBlock:   to,
+        });
+        found = logs.find((l) => l.topics[1] && Number(BigInt(l.topics[1])) === tokenId);
+      } catch { /* continue to next window */ }
+    }
+    registrationTxHash = found?.transactionHash ?? null;
+  } else {
+    // NOT on-chain — register with correct agentType=1 (JUDGE)
+    console.log(`  → Registering on-chain with agentType=1 (JUDGE)...`);
+    const regTx = await identityContract.register(
+      info.agent_id,
+      1,                          // agentType = JUDGE
+      retryResp.agent_uri || `ipfs://${info.agent_id}`,
+      "1.0.0",
+      BigInt(0),
+      { gasLimit: BigInt(800_000) }
+    );
+    console.log(`  tx: ${regTx.hash}`);
+    registrationTxHash = regTx.hash;
+    const regReceipt = await waitReceipt(provider, registrationTxHash);
+    tokenId = parseTokenId(regReceipt, identityAddr) ?? null;
+    console.log(`  Token ID: ${tokenId ?? "(not parsed)"}`);
+  }
+
+  if (!registrationTxHash) {
+    console.log("  ✗ Could not find tx_hash for confirm — skipping confirm.");
+  } else {
+    console.log("  → POST /api/v1/agents/confirm ...");
+    await backendPost("/api/v1/agents/confirm", {
+      registration_id: registrationId,
+      tx_hash:         registrationTxHash,
+      ...(tokenId != null && { token_id: tokenId }),
+    });
+    console.log("  ✓ Confirmed");
+  }
 
   console.log(`  → Staking 0.001 ETH (recovery) ...`);
   const stakeTx = await wallet.sendTransaction({
@@ -224,12 +257,6 @@ async function registerJudge(info, deployer, provider, identityAddr, stakingAddr
   const wallet = new ethers.Wallet(info.private_key, provider);
   console.log(`\n── ${info.name} ${"─".repeat(40 - info.name.length)}`);
   
-  // Fund wallet if needed
-  const bal = await provider.getBalance(wallet.address);
-  if (bal < ethers.parseEther("0.003")) {
-      await deployer.sendTransaction({ to: wallet.address, value: ethers.parseEther("0.05") });
-  }
-
   const payload = { 
     ...info, 
     agent_type: "judge", 

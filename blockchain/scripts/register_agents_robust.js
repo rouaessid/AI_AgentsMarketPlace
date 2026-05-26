@@ -12,12 +12,12 @@ const fs   = require("fs");
 const path = require("path");
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const RPC     = "http://127.0.0.1:8545";
+const RPC     = "https://sepolia.base.org";
 const BACKEND = "http://localhost:8000";
 
 const AGENTS = [
   {
-    owner_key:       "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d", // Account #1
+    owner_key:       "0x73046f80d52c282333a73c9ebe50d2e5dea51d05122b68b5ab9e9ce1cfccefbf", // Account #1
     stake_eth:       "0.001",
     agent_id:        "analyst-01",
     name:            "AnalystBot",
@@ -47,7 +47,7 @@ const AGENTS = [
     ],
   },
   {
-    owner_key:       "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d", // Account #1
+    owner_key:       "0x73046f80d52c282333a73c9ebe50d2e5dea51d05122b68b5ab9e9ce1cfccefbf", // Account #1
     stake_eth:       "0.001",
     agent_id:        "writer-01",
     name:            "WriterBot",

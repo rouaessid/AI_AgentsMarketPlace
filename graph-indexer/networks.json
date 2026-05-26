@@ -1,0 +1,24 @@
+{
+  "base-sepolia": {
+    "IdentityRegistry": {
+      "address": "0x2802884A6d93d2838111EE7add7B2231E35f62c9",
+      "startBlock": 41965186
+    },
+    "StakingContract": {
+      "address": "0x5b0920Bf34874F22d57f7c0E39646e7d0ED0beA3",
+      "startBlock": 41965186
+    },
+    "EscrowManager": {
+      "address": "0x0E857Dcd555fB4dFAB4Cd26BD1872EfAa61451B7",
+      "startBlock": 41965186
+    },
+    "ReputationRegistry": {
+      "address": "0x8EDB2Eb58d8B1015721e8E0f4cF36EC2C06Ce912",
+      "startBlock": 41965186
+    },
+    "ValidationRegistry": {
+      "address": "0x3d15357661f516c6E9acD7eb3349FBD8042B15DB",
+      "startBlock": 41965186
+    }
+  }
+}

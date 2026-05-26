@@ -99,7 +99,7 @@ def _sync_blocking() -> None:
         logger.debug("EigenTrust sync : aucun agent enregistré on-chain")
         return
 
-    from app.db.collaboration_repo import get_solo_scores, get_pipeline_scores
+    from app.services.graph_client import get_solo_scores, get_pipeline_scores
     p_overrides = {}
     for a in agents:
         scores = get_solo_scores(a["agent_id"]) or get_pipeline_scores(a["agent_id"])

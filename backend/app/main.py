@@ -42,7 +42,7 @@ except OSError as _e:
 # Silence very verbose third-party loggers
 for _noisy in ("web3", "urllib3", "httpcore", "httpx", "sentence_transformers",
                "datasets", "huggingface_hub", "filelock", "transformers",
-               "app.services.ngrok_service", "app.services.blockchain_indexer"):
+               "app.services.ngrok_service"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -72,33 +72,38 @@ async def lifespan(_app: FastAPI):
     except Exception as _e:
         logger.warning("Could not reset stale pipeline task(s): %s", _e)
 
-    # 4. Démarrer le blockchain indexer en tâche de fond
-    from app.services.blockchain_indexer import BlockchainIndexer
-    indexer = BlockchainIndexer()
-    indexer_task = asyncio.create_task(indexer.start())
-    logger.info("BlockchainIndexer démarré en arrière-plan")
+    # 4. (blockchain_indexer removed — The Graph now indexes all on-chain events)
 
     # 5. Backfill embeddings for agents registered before embedding support
     async def _backfill_embeddings():
         import asyncio as _aio
-        from app.db.database import get_connection
+        from app.db.database import AgentEmbedding, get_session
         from app.services.matching_service import embed_agent_capabilities
+        from app.services.agent_service import get_agent_from_cache, _fetch_ipfs_manifest
         import json as _json
-        conn = get_connection()
-        try:
-            rows = conn.execute(
-                "SELECT agent_id, identity_metadata FROM agents "
-                "WHERE capability_embedding IS NULL AND identity_metadata IS NOT NULL"
-            ).fetchall()
-        finally:
-            conn.close()
+        with get_session() as _s:
+            rows = (
+                _s.query(AgentEmbedding)
+                .filter(AgentEmbedding.capability_embedding.is_(None))
+                .filter(AgentEmbedding.ipfs_cid.isnot(None))
+                .all()
+            )
+            rows = [{"agent_id": r.agent_id, "ipfs_cid": r.ipfs_cid} for r in rows]
         if not rows:
             return
         logger.info("Backfilling embeddings for %d agent(s)…", len(rows))
         loop = _aio.get_event_loop()
         for row in rows:
             try:
-                meta = _json.loads(row["identity_metadata"])
+                cached = get_agent_from_cache(row["agent_id"])
+                meta_raw = (cached or {}).get("identity_metadata") if cached else None
+                if meta_raw:
+                    meta = _json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
+                else:
+                    manifest = _fetch_ipfs_manifest(row["ipfs_cid"], row["agent_id"])
+                    if not manifest:
+                        continue
+                    meta = manifest.model_dump()
                 await loop.run_in_executor(
                     None, lambda m=meta, a=row["agent_id"]: embed_agent_capabilities(a, m)
                 )
@@ -126,8 +131,7 @@ async def lifespan(_app: FastAPI):
 
     # Arrêt propre — gather absorbe le CancelledError sans le perdre
     backfill_task.cancel()
-    indexer_task.cancel()
-    await asyncio.gather(backfill_task, indexer_task, return_exceptions=True)
+    await asyncio.gather(backfill_task, return_exceptions=True)
     await stop_watchdog()
     await stop_ngrok()
 
@@ -172,14 +176,26 @@ async def health():
 
 
 @app.get("/ipfs/{cid}", tags=["ipfs"])
-async def serve_local_ipfs(cid: str):
-    """Serve local IPFS files so judge containers can fetch traces via host.docker.internal."""
-    base = Path(settings.storage_path) / "ipfs_local"
-    f = base / f"{cid}.json"
-    if not f.exists():
-        raise HTTPException(404, detail=f"CID {cid} not found locally")
-    import json
-    return JSONResponse(json.loads(f.read_text(encoding="utf-8")))
+async def serve_ipfs(cid: str):
+    """Proxy IPFS content to judge containers via host.docker.internal → Pinata.
+    Injects challenge_token if a validation round is active for this CID."""
+    import httpx
+    from app.services.judge_service import _CHALLENGE_STORE
+    for gateway in [
+        f"https://gateway.pinata.cloud/ipfs/{cid}",
+        f"https://ipfs.io/ipfs/{cid}",
+    ]:
+        try:
+            r = httpx.get(gateway, timeout=15, follow_redirects=True)
+            if r.status_code == 200:
+                data = r.json()
+                token = _CHALLENGE_STORE.get(cid)
+                if token:
+                    data["challenge_token"] = token
+                return JSONResponse(data)
+        except Exception:
+            continue
+    raise HTTPException(404, detail=f"CID {cid} not found on IPFS")
 
 
 @app.get("/tunnel", tags=["system"])

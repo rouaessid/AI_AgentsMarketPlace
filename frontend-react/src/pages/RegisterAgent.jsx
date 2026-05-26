@@ -119,18 +119,18 @@ export default function RegisterAgent() {
       if (!res.unsigned_tx?.data) throw new Error('Backend did not return unsigned_tx.data')
       if (!window.ethereum) throw new Error('MetaMask not detected')
 
-      // Ensure correct chain (Hardhat 31337)
+      // Ensure correct chain (Base Sepolia 84532)
       try {
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x7A69' }],
+          params: [{ chainId: '0x14A34' }],
         })
       } catch (sw) {
         if (sw.code === 4902) {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
-            params: [{ chainId: '0x7A69', chainName: 'Hardhat Local',
-              rpcUrls: ['http://127.0.0.1:8545'],
+            params: [{ chainId: '0x14A34', chainName: 'Base Sepolia',
+              rpcUrls: ['https://base-sepolia-rpc.publicnode.com', 'https://sepolia.base.org'],
               nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 } }],
           })
         }
@@ -153,13 +153,35 @@ export default function RegisterAgent() {
       // Step 4 — Notify backend of confirmed tx
       await agentApi.confirm({ registration_id: res.registration_id, tx_hash: txHash })
 
-      setResponse({ ...res, tx_hash: txHash })
+      // Step 5 — Poll /status until The Graph indexes AgentCreated
+      setStep(4.5)
+      const agentId = res.agent_id
+      let confirmed = false
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 4000))
+        try {
+          const s = await agentApi.status(agentId)
+          if (s.confirmed) { confirmed = true; break }
+        } catch (_) {}
+      }
+
+      setResponse({ ...res, tx_hash: txHash, confirmed })
       setStep(5)
     } catch (e) {
       setApiError(e.message || 'Registration failed. Make sure the backend is running.')
     }
     setSubmitting(false)
   }
+
+  if (step === 4.5) return (
+    <div className="min-h-screen bg-am-bg flex items-center justify-center">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
+        <p className="text-lg font-medium text-gray-700">Waiting for The Graph to index AgentCreated...</p>
+        <p className="text-sm text-gray-400 mt-1">This usually takes 10–30 seconds</p>
+      </div>
+    </div>
+  )
 
   if (step === 5 && response) return <SuccessStep response={response} navigate={navigate} isJudge={form.agent_type === 'judge'} />
 
@@ -678,19 +700,19 @@ function SuccessStep({ response, navigate, isJudge }) {
       const from = accounts[0]
       if (!from) { setStakeError('No account connected in MetaMask.'); setStaking(false); return }
 
-      // Force Hardhat Local network (chain 31337)
+      // Force Base Sepolia network (chain 84532)
       try {
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x7A69' }], // 31337 in hex
+          params: [{ chainId: '0x14A34' }], // 84532 in hex
         })
       } catch (switchErr) {
         // Chain not added yet — add it
         if (switchErr.code === 4902) {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
-            params: [{ chainId: '0x7A69', chainName: 'Hardhat Local',
-              rpcUrls: ['http://127.0.0.1:8545'], nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 } }],
+            params: [{ chainId: '0x14A34', chainName: 'Base Sepolia',
+              rpcUrls: ['https://base-sepolia-rpc.publicnode.com', 'https://sepolia.base.org'], nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 } }],
           })
         }
       }

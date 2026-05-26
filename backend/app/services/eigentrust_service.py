@@ -63,8 +63,21 @@ from typing import Optional
 
 import numpy as np
 
-from app.db.collaboration_repo import get_pipeline_scores, get_solo_scores
-from app.db.reputation_repo import get_reputation_signals
+from app.services.graph_client import get_pipeline_scores, get_solo_scores, get_reputation_events as _get_rep_events
+
+
+def get_reputation_signals(token_id: int) -> list[dict]:
+    """Adapter: normalize The Graph camelCase fields to snake_case for internal use."""
+    raw = _get_rep_events(token_id)
+    return [
+        {
+            "value":          e.get("value", 0),
+            "value_decimals": e.get("valueDecimals", 0),
+            "tag1":           e.get("tag1", ""),
+            "tag2":           e.get("tag2", ""),
+        }
+        for e in raw
+    ]
 
 logger = logging.getLogger(__name__)
 

@@ -148,7 +148,7 @@ async def retry_register(agent_id: str) -> JSONResponse:
 
 
 @router.post("/confirm", response_model=AgentRecord)
-async def confirm_onchain(body: AgentOnChainConfirm, bg: BackgroundTasks) -> AgentRecord:
+async def confirm_onchain(body: AgentOnChainConfirm) -> AgentRecord:
     try:
         return await agent_svc.confirm(body)
     except Exception as e:
@@ -175,17 +175,49 @@ async def registration_status(agent_id: str) -> JSONResponse:
       - "active"           : indexer confirmed AgentCreated — agent is live
       - "suspended" / "revoked" : changed by governance
     """
-    from app.db.identity_repo import get_agent_identity
+    from app.db.identity_repo import get_agent_identity, upsert_agent_identity
+    from app.services.graph_client import get_agent as _get_graph_agent
+
     row = get_agent_identity(agent_id)
     if not row:
         raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
+
+    # Lazy confirmation from The Graph: if pending, check if AgentCreated was indexed
+    if row.get("status") in ("pending_signature", "pending_index"):
+        graph_agent = _get_graph_agent(agent_id)
+        if graph_agent:
+            token_id = int(graph_agent["tokenId"])
+            upsert_agent_identity(agent_id=agent_id, status="active")
+            row["status"]           = "active"
+            row["current_token_id"] = token_id
+            from app.services.agent_service import _records, _agent_index as _aidx
+            from app.models.agent import AgentStatus as _AS
+            rid = _aidx.get(agent_id)
+            if rid and rid in _records:
+                _records[rid] = _records[rid].model_copy(update={
+                    "status": _AS.ACTIVE,
+                    "current_token_id": token_id,
+                })
+                # Calcul embedding maintenant que The Graph a confirmé ACTIVE
+                try:
+                    rec = _records[rid]
+                    if rec.registration_file:
+                        import asyncio as _aio
+                        from app.services.matching_service import embed_agent_capabilities
+                        meta = rec.registration_file.model_dump()
+                        _aio.get_event_loop().run_in_executor(
+                            None, lambda: embed_agent_capabilities(agent_id, meta)
+                        )
+                except Exception as _e:
+                    logger.warning("Embedding non calculé pour %s: %s", agent_id, _e)
+
     return JSONResponse({
-        "agent_id":   agent_id,
-        "status":     row["status"],
-        "token_id":   row["current_token_id"],
-        "tx_hash":    row["tx_hash"],
-        "block_number": row["block_number"],
-        "confirmed":  row["status"] == "active",
+        "agent_id":     agent_id,
+        "status":       row["status"],
+        "token_id":     row.get("current_token_id"),
+        "tx_hash":      row.get("tx_hash"),
+        "block_number": None,
+        "confirmed":    row["status"] == "active",
     })
 
 
@@ -206,21 +238,29 @@ async def list_by_owner(owner_address: str) -> JSONResponse:
     records = await agent_svc.list_by_owner(owner_address)
 
     from app.models.agent import AgentType as _AgentType
-    from app.db.judge_reputation_repo import get_judge_reputation
-    from app.db.escrow_repo import get_escrow_events_for_agent
+    from app.services.graph_client import get_judge_reputation
+    import asyncio as _aio
+
+    # Fetch judge reputations in parallel (pass wallet address, not agent_id)
+    judge_records = [r for r in records if r.agent_type == _AgentType.JUDGE and r.owner_address]
+    loop = _aio.get_event_loop()
+    rep_results = await _aio.gather(*[
+        loop.run_in_executor(None, get_judge_reputation, r.owner_address)
+        for r in judge_records
+    ], return_exceptions=True)
+    rep_by_agent = {
+        r.agent_id: res
+        for r, res in zip(judge_records, rep_results)
+        if not isinstance(res, Exception)
+    }
 
     result = []
     for r in records:
         data = r.model_dump(mode="json")
+        data["earnings_eth"] = 0.0
 
-        # ── Earnings from escrow: sum released payments for this agent ──────
-        events        = get_escrow_events_for_agent(r.agent_id)
-        released_wei  = sum(int(e["amount_wei"] or 0) for e in events if e["event_type"] == "released")
-        data["earnings_eth"] = round(released_wei / 1e18, 6)
-
-        # ── Judge-specific metrics injected into capabilities ────────────────
-        if r.agent_type == _AgentType.JUDGE:
-            rep  = get_judge_reputation(r.agent_id)
+        if r.agent_type == _AgentType.JUDGE and r.agent_id in rep_by_agent:
+            rep  = rep_by_agent[r.agent_id]
             reg  = data.get("registration_file") or {}
             caps = dict(reg.get("capabilities") or {})
             caps["tasks_performed"]  = rep["total_validations"]
@@ -326,7 +366,7 @@ async def run_sandbox(agent_id: str, task_prompt: str = Query("Test sandbox")) -
 
 
 @router.get("/{agent_id}/sandbox/{run_id}")
-async def get_manifest(agent_id: str, run_id: str) -> JSONResponse:
+async def get_manifest(_agent_id: str, run_id: str) -> JSONResponse:
     if run_id not in _manifests:
         raise HTTPException(404, detail="Manifest introuvable")
     return JSONResponse(_manifests[run_id])
@@ -371,20 +411,13 @@ async def run_agent_public(
             if "@sha256:" in fresh and fresh != docker_image:
                 logger.warning("Digest obsolète %s → mise à jour automatique", agent_id)
                 from app.services.agent_service import _records, _agent_index
-                from app.db.agent_repo import upsert_agent
+                from app.db.identity_repo import upsert_agent_identity
                 rid = _agent_index.get(agent_id)
                 if rid and rid in _records:
                     _records[rid] = _records[rid].model_copy(
                         update={"docker_image": fresh}
                     )
-                upsert_agent(
-                    agent_id=record.agent_id, registration_id=record.id,
-                    token_id=record.current_token_id, tx_hash=record.tx_hash,
-                    docker_image=fresh, status=record.status.value,
-                    registered_at=record.registered_at.isoformat()
-                                  if record.registered_at else None,
-                    owner_address=record.owner_address,
-                )
+                upsert_agent_identity(agent_id=record.agent_id, status=record.status.value)
                 record = record.model_copy(update={"docker_image": fresh})
                 logger.info("Digest mis à jour: %s", fresh[:70])
             elif "@sha256:" not in fresh:
@@ -457,14 +490,6 @@ async def run_agent_public(
     })
 
 
-async def _bg_sandbox(record: AgentRecord, inp: SandboxInput) -> None:
-    try:
-        m = await sandbox_svc.run_agent(record, inp)
-        _manifests[m.run_id] = m.to_dict()
-    except Exception:
-        logger.exception("BG sandbox failed for %s", record.agent_id)
-
-
 # ═════════════════════════════════════════════════════════════════════════════
 #  BUYER — Purchase & Validation endpoints
 # ═════════════════════════════════════════════════════════════════════════════
@@ -529,8 +554,8 @@ async def get_purchase_info(agent_id: str) -> PurchaseInfoResponse:
     )
 
 
-@router.post("/{agent_id}/purchase")
-async def purchase_agent(
+@router.post("/{agent_id}/grant-access")
+async def grant_access(
     agent_id: str,
     body: PurchaseRequest,
 ) -> PurchaseResponse:
@@ -555,10 +580,9 @@ async def purchase_agent(
             validation_status=_get_val_status(agent_id),
         )
 
-    # Verify payment exists on-chain before granting access
-    from app.db.escrow_repo import get_escrow_events_for_task
-    onchain = get_escrow_events_for_task(body.task_id)
-    if not any(e["event_type"] == "deposited" for e in onchain):
+    # Verify payment exists on-chain via The Graph
+    from app.services.graph_client import payment_deposited_for_task
+    if not payment_deposited_for_task(body.task_id):
         raise HTTPException(402, detail="Paiement non trouvé on-chain — attendez la confirmation du bloc")
 
     access_id = access_repo.create_access_grant(
@@ -663,20 +687,13 @@ async def trigger_validation(agent_id: str, bg: BackgroundTasks) -> JSONResponse
 async def get_agent_reputation(agent_id: str):
     """
     Return on-chain reputation signals for an agent, aggregated by tag1.
-
-    Signals are indexed from ReputationRegistry NewFeedback events:
-      - successRate : judge verdicts from ValidationRegistry
-      - starred     : user ratings (1-5 stars, stored as 20-100)
-      - eigenTrust  : platform EigenTrust score (Phase 2)
+    Data comes from The Graph (ReputationRegistry NewFeedback events).
     """
-    from app.db.identity_repo import get_agent_identity
-    from app.db.reputation_repo import get_aggregated_score, get_reputation_signals
+    from app.services.graph_client import get_agent, get_aggregated_reputation, get_reputation_events
 
-    identity = get_agent_identity(agent_id)
-    if not identity:
-        raise HTTPException(404, detail=f"Agent {agent_id!r} not found")
+    graph_agent = get_agent(agent_id)
+    token_id = int(graph_agent["tokenId"]) if graph_agent else None
 
-    token_id = identity.get("current_token_id")
     if not token_id:
         return JSONResponse({
             "agent_id":  agent_id,
@@ -686,8 +703,8 @@ async def get_agent_reputation(agent_id: str):
             "message":  "Agent not yet registered on-chain",
         })
 
-    aggregated = get_aggregated_score(token_id)
-    signals    = get_reputation_signals(token_id)
+    aggregated = get_aggregated_reputation(token_id)
+    signals    = get_reputation_events(token_id)
 
     return JSONResponse({
         "agent_id":   agent_id,
@@ -713,13 +730,19 @@ async def get_feedback_info(
       2. Signer + envoyer la tx avec MetaMask (to=reputation_address, data=call_data)
       3. L'indexer capte le NewFeedback event → reputation_events mis à jour
     """
-    from app.db.identity_repo import get_agent_identity
+    from app.services.graph_client import get_agent as _get_graph_agent
 
-    identity = get_agent_identity(agent_id)
-    if not identity:
-        raise HTTPException(404, detail=f"Agent {agent_id!r} introuvable")
+    graph_agent = _get_graph_agent(agent_id)
+    if not graph_agent:
+        # Fallback: try local DB
+        from app.db.identity_repo import get_agent_identity
+        identity = get_agent_identity(agent_id)
+        if not identity:
+            raise HTTPException(404, detail=f"Agent {agent_id!r} introuvable")
+        token_id = identity.get("current_token_id")
+    else:
+        token_id = int(graph_agent["tokenId"])
 
-    token_id = identity.get("current_token_id")
     if not token_id:
         raise HTTPException(400, detail="Agent non encore enregistré on-chain")
 
@@ -765,7 +788,7 @@ async def get_feedback_info(
 @router.get("/{agent_id}/judge-stats")
 async def get_judge_stats(agent_id: str):
     """Aggregated statistics for a judge agent (for the 'My Agents > View' panel)."""
-    from app.db.judge_reputation_repo import get_judge_reputation
+    from app.services.graph_client import get_judge_reputation
     from app.db.access_repo import get_verdicts_by_judge
     from datetime import datetime, timezone, timedelta
 

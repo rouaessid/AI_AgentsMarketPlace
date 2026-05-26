@@ -112,32 +112,27 @@ def _get_available_domains() -> list[str]:
 def _get_agents_info() -> tuple[int, str]:
     """Retourne (nombre, description textuelle) des providers actifs pour le prompt LLM."""
     try:
-        from app.db.database import get_connection
-        conn = get_connection()
-        try:
-            rows = conn.execute(
-                "SELECT agent_id, identity_metadata FROM agents "
-                "WHERE status='active' AND agent_type != 1"
-            ).fetchall()
-            lines = []
-            for row in rows:
+        from app.services.agent_service import get_all_agents_from_cache
+        rows  = get_all_agents_from_cache()
+        lines = []
+        for row in rows:
+            if row.get("agent_type") == 1 or row.get("status") != "active":
+                continue
+            meta_raw = row.get("identity_metadata") or "{}"
+            try:
+                meta = json.loads(meta_raw) if isinstance(meta_raw, str) else {}
+            except Exception:
                 meta = {}
-                if row["identity_metadata"]:
-                    try:
-                        meta = json.loads(row["identity_metadata"])
-                    except Exception:
-                        pass
-                name  = meta.get("name") or row["agent_id"]
-                tasks = []
-                for svc in meta.get("services", []):
-                    tasks.extend(svc.get("skills", []))
-                if not tasks:
-                    tasks = meta.get("capabilities", {}).get("supported_tasks", [])
-                desc = ", ".join(tasks[:6]) if tasks else "agent généraliste"
-                lines.append(f"- {name} (id={row['agent_id']}): {desc}")
-            return len(rows), "\n".join(lines) if lines else "3 agents (researcher, analyst, writer)"
-        finally:
-            conn.close()
+            name  = meta.get("name") or row["agent_id"]
+            tasks = []
+            for svc in meta.get("services", []):
+                tasks.extend(svc.get("skills", []))
+            if not tasks:
+                tasks = meta.get("capabilities", {}).get("supported_tasks", [])
+            desc = ", ".join(tasks[:6]) if tasks else "agent généraliste"
+            lines.append(f"- {name} (id={row['agent_id']}): {desc}")
+        active = [r for r in rows if r.get("agent_type") != 1 and r.get("status") == "active"]
+        return len(active), "\n".join(lines) if lines else "3 agents (researcher, analyst, writer)"
     except Exception:
         return 3, "- ResearchBot (id=researcher-01): research, analyze\n- AnalystBot (id=analyst-01): analyze, summarize\n- WriterBot (id=writer-01): write, draft, report"
 
@@ -145,15 +140,9 @@ def _get_agents_info() -> tuple[int, str]:
 def _get_provider_count() -> int:
     """Retourne le nombre de providers actifs (agents non-juges)."""
     try:
-        from app.db.database import get_connection
-        conn = get_connection()
-        try:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM agents WHERE status='active' AND agent_type != 1"
-            ).fetchone()
-            return max(1, row[0]) if row else 3
-        finally:
-            conn.close()
+        from app.services.agent_service import get_all_agents_from_cache
+        rows = get_all_agents_from_cache()
+        return max(1, sum(1 for r in rows if r.get("agent_type") != 1 and r.get("status") == "active"))
     except Exception:
         return 3
 

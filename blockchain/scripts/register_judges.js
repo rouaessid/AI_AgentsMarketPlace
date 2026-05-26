@@ -33,12 +33,12 @@ const fs   = require("fs");
 const path = require("path");
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const RPC     = "http://127.0.0.1:8545";
+const RPC     = "https://sepolia.base.org";
 const BACKEND = "http://localhost:8000";
 
 // Single owner wallet — signs for all 3 judges
 // Address: 0x90F79bf6EB2c4f870365E785982E1f101E93b906  (Hardhat account #3)
-const OWNER_KEY = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
+const OWNER_KEY = "0x8900abaabf0051608e714523caeed0edc096e304666123905bc96ff7df51b3c7";
 
 const STAKE_ETH     = "0.001";
 const MIN_GAS_ETH   = "0.002";   // buffer for identity + stake txs

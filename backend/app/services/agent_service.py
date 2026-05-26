@@ -1,9 +1,7 @@
 from __future__ import annotations
-import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 from app.core.config import get_settings
 from app.models.agent import (
@@ -21,6 +19,61 @@ settings = get_settings()
 
 _records:     dict[str, AgentRecord] = {}
 _agent_index: dict[str, str]         = {}
+
+
+# ── Cache accessors (called by identity_repo as facade) ───────────────────────
+
+def _record_to_dict(record: AgentRecord) -> dict:
+    """Convert an AgentRecord to the flat dict format expected by callers of get_agent_identity()."""
+    reg_file = record.registration_file
+    return {
+        "agent_id":           record.agent_id,
+        "registration_id":    record.id,
+        "name":               record.name,
+        "version":            record.version,
+        "status":             record.status.value,
+        "owner_address":      record.owner_address,
+        "docker_image":       record.docker_image,
+        "agent_type":         record.agent_type.to_uint8(),
+        "agent_uri":          record.agent_uri,
+        "ipfs_cid":           record.ipfs_cid,
+        "price_per_task":     record.price_per_task,
+        "stake_amount":       record.stake_amount,
+        "current_token_id":   record.current_token_id,
+        "tx_hash":            record.tx_hash,
+        "registered_at":      record.registered_at.isoformat() if record.registered_at else None,
+        "identity_metadata":  reg_file.model_dump_json() if reg_file else None,
+    }
+
+
+def get_agent_from_cache(agent_id: str) -> dict | None:
+    rid = _agent_index.get(agent_id)
+    if not rid or rid not in _records:
+        return None
+    return _record_to_dict(_records[rid])
+
+
+def get_all_agents_from_cache() -> list[dict]:
+    return [_record_to_dict(r) for r in _records.values()]
+
+
+# ── IPFS manifest fetch (used at startup restore) ─────────────────────────────
+
+def _fetch_ipfs_manifest(ipfs_cid: str, agent_id: str) -> AgentRegistrationFile | None:
+    """Fetch and parse IPFS manifest from Pinata."""
+    import httpx as _httpx
+    for url in [
+        f"https://gateway.pinata.cloud/ipfs/{ipfs_cid}",
+        f"https://ipfs.io/ipfs/{ipfs_cid}",
+    ]:
+        try:
+            r = _httpx.get(url, timeout=10)
+            r.raise_for_status()
+            return AgentRegistrationFile(**r.json())
+        except Exception as e:
+            logger.debug("IPFS fetch %s failed for %s: %s", url, agent_id, e)
+    logger.warning("IPFS manifest not found for %s (cid=%s)", agent_id, ipfs_cid)
+    return None
 
 
 def _refresh_record_telemetry(agent_id: str, updates: dict) -> None:
@@ -53,16 +106,15 @@ def _build_reg_file(req: AgentSubmitRequest) -> AgentRegistrationFile:
             "language": req.language, "max_tokens": req.max_tokens,
             "supported_tasks": req.supported_tasks, "special_caps": req.special_caps,
             "env_var_keys": req.env_var_keys,
-            # Données historiques simulées pour le design "Premium"
-            "monthly_tasks": [12, 18, 15, 22, 30, 28, 35, 42, 38, 45, 50, 0][:12], # Zéro pour le futur
-            "weekly_success": [95, 98, 97, 99, 96, 98, 100],
-            "success_rate": 98.5,
-            "reputation_score": 95,
-            "tasks_performed": 335,
-            "usage_count": 1250,
-            "avg_response_time": 1.2,
-            "task_completion_rate": 99.2,
-            "uptime": 99.9,
+            "monthly_tasks": [0] * 12,
+            "weekly_success": [0] * 7,
+            "success_rate": None,
+            "reputation_score": None,
+            "tasks_performed": 0,
+            "usage_count": 0,
+            "avg_response_time": None,
+            "task_completion_rate": None,
+            "uptime": None,
         },
         sandbox_config={
             "docker_image": req.docker_image, "cpu_limit": req.cpu_limit,
@@ -122,112 +174,152 @@ def _build_version_tx(agent_id, new_uri, new_version) -> UnsignedTx:
 
 async def restore_from_db() -> None:
     """
-    Load agents from DB into memory at startup.
+    Rebuild in-memory cache at startup.
 
-    Identity (canonical) comes from identity_repo (written by indexer).
-    Telemetry comes from telemetry_repo (written by runtime).
-    IPFS is only a fallback if identity_metadata is missing.
+    Sources (in priority order):
+      1. agent_embeddings DB — agent_id + ipfs_cid + status (operational state)
+      2. IPFS manifest       — name, price, docker_image, capabilities (canonical identity)
+      3. The Graph           — tokenId, owner, agentType, agentURI (on-chain truth)
+      4. agent_telemetry DB  — runtime metrics
     """
-    from app.db.identity_repo import get_all_agent_identities
+    from app.db.identity_repo import get_all_embeddings, upsert_agent_identity
     from app.db.telemetry_repo import get_all_telemetry
-    from app.db.reputation_repo import get_latest_eigentrust_score
+    from app.services.graph_client import get_agent, get_latest_eigentrust_score
 
-    agents    = get_all_agent_identities()
-    telemetry = get_all_telemetry()  # {agent_id: dict}
+    rows      = get_all_embeddings()   # [{agent_id, ipfs_cid, status, capability_embedding}]
+    telemetry = get_all_telemetry()    # {agent_id: dict}
 
-    if not agents:
-        logger.info("DB vide — aucun agent a charger")
-        return
+    if not rows:
+        # DB is empty — bootstrap from The Graph (agents already on-chain + IPFS)
+        logger.info("DB vide — bootstrap depuis The Graph...")
+        from app.services.graph_client import get_all_agents as _get_all_graph_agents
+        graph_agents = _get_all_graph_agents()
+        if not graph_agents:
+            logger.info("The Graph ne retourne aucun agent — DB reste vide")
+            return
+        for ga in graph_agents:
+            agent_uri = ga.get("agentURI") or ""
+            ipfs_cid  = agent_uri.removeprefix("ipfs://") if agent_uri.startswith("ipfs://") else None
+            upsert_agent_identity(
+                agent_id=ga["id"],
+                ipfs_cid=ipfs_cid,
+                status="active",
+            )
+            logger.info("Bootstrap: %s (tokenId=%s)", ga["id"], ga.get("tokenId"))
+        rows = get_all_embeddings()
+        if not rows:
+            logger.warning("Bootstrap The Graph terminé mais DB toujours vide")
+            return
 
-    ipfs_dir = Path(settings.storage_path) / "ipfs_local"
+    _valid_statuses = {s.value for s in AgentStatus}
 
-    for a in agents:
+    # Fetch IPFS manifests + The Graph data in parallel
+    import asyncio as _asyncio
+    loop = _asyncio.get_event_loop()
+
+    async def _fetch_row(row: dict) -> tuple[dict, object, dict | None]:
+        ipfs_cid = row.get("ipfs_cid")
+        agent_id = row.get("agent_id")
+        reg_file, on_chain = await _asyncio.gather(
+            loop.run_in_executor(None, lambda c=ipfs_cid, a=agent_id: _fetch_ipfs_manifest(c, a) if c else None),
+            loop.run_in_executor(None, lambda a=agent_id: get_agent(a)),
+        )
+        return row, reg_file, on_chain
+
+    fetched = await _asyncio.gather(*[_fetch_row(r) for r in rows], return_exceptions=True)
+
+    for result in fetched:
+        if isinstance(result, Exception):
+            logger.warning("Erreur fetch parallèle: %s", result)
+            continue
+        row, reg_file, on_chain = result
+        agent_id = row.get("agent_id")
         try:
-            rid      = a["registration_id"]
-            agent_id = a["agent_id"]
-            tel      = telemetry.get(agent_id, {})
-            reg_file = None
+            ipfs_cid = row.get("ipfs_cid")
+            status   = row.get("status", "pending_signature")
 
-            # Priority 1: identity_metadata from DB (written by indexer or submit)
-            if a.get("identity_metadata"):
-                try:
-                    reg_file = AgentRegistrationFile(**json.loads(a["identity_metadata"]))
-                except Exception:
-                    logger.warning("identity_metadata invalide pour %s", agent_id)
+            if not reg_file:
+                logger.warning("Pas de manifest IPFS pour %s (cid=%s)", agent_id, ipfs_cid)
 
-            # Priority 2 (fallback): IPFS local
-            if not reg_file and ipfs_dir.exists():
-                files = sorted(ipfs_dir.glob("*.json"),
-                               key=lambda x: x.stat().st_mtime, reverse=True)
-                for f in files:
-                    try:
-                        data = json.loads(f.read_text(encoding="utf-8"))
-                        regs = data.get("registrations", [])
-                        if any(r.get("agentId") == agent_id for r in regs):
-                            reg_file = AgentRegistrationFile(**data)
-                            break
-                    except Exception:
-                        continue
+            # ── 2. The Graph (on-chain truth) ─────────────────────────────────
+            token_id     = int(on_chain["tokenId"])    if on_chain and on_chain.get("tokenId")    else None
+            owner        = (on_chain.get("owner")      if on_chain else None) or ""
+            _manifest_type = getattr(reg_file, "agent_type", None) if reg_file else None
+            _manifest_type_v = 1 if str(_manifest_type).lower() in ("1", "judge") else 0
+            agent_type_v = int(on_chain["agentType"]) if on_chain and on_chain.get("agentType") else _manifest_type_v
+            agent_uri    = (on_chain.get("agentURI")   if on_chain else None) or (
+                f"ipfs://{ipfs_cid}" if ipfs_cid else None
+            )
+            version      = (on_chain.get("version")    if on_chain else None) or (
+                reg_file.version if reg_file else "1.0.0"
+            )
+            name         = reg_file.name if reg_file else agent_id
+            pricing      = reg_file.pricing if reg_file else {}
+            # If The Graph confirms on-chain presence, treat as active regardless of DB status
+            if on_chain and token_id:
+                status = "active"
 
-            name    = a.get("name") or (reg_file.name if reg_file else agent_id)
-            version = a.get("version") or (reg_file.version if reg_file else "1.0.0")
-            pricing = reg_file.pricing if reg_file else {}
-
-            # Merge telemetry into capabilities (display layer only)
-            # reg_file check is separate from tel — tel={} (empty) is falsy but valid
+            # ── 3. Telemetry ──────────────────────────────────────────────────
+            tel = telemetry.get(agent_id, {})
             if reg_file:
                 caps = dict(reg_file.capabilities)
                 caps.update({
                     "tasks_performed":      tel.get("tasks_performed", 0),
                     "usage_count":          tel.get("usage_count", 0),
-                    "avg_response_time":    tel.get("avg_response_time", 1.2),
-                    "task_completion_rate": tel.get("task_completion_rate", 99.2),
-                    "uptime":               tel.get("uptime", 99.9),
-                    "monthly_tasks":        tel.get("monthly_tasks", [0]*12),
-                    "weekly_success":       tel.get("weekly_success", [0]*7),
-                    "success_rate":         tel.get("success_rate", 98.5),
-                    "reputation_score":     get_latest_eigentrust_score(a.get("current_token_id")) or tel.get("reputation_score", 0.0),
+                    "avg_response_time":    tel.get("avg_response_time"),
+                    "task_completion_rate": tel.get("task_completion_rate"),
+                    "uptime":               tel.get("uptime"),
+                    "monthly_tasks":        tel.get("monthly_tasks", [0] * 12),
+                    "weekly_success":       tel.get("weekly_success", [0] * 7),
+                    "success_rate":         tel.get("success_rate", 0.0),
+                    "reputation_score":     (
+                        get_latest_eigentrust_score(token_id)
+                        or tel.get("reputation_score", 0.0)
+                    ),
                     "last_active":          tel.get("last_active"),
                 })
                 reg_file = reg_file.model_copy(update={"capabilities": caps})
 
+            # ── 4. Build AgentRecord ──────────────────────────────────────────
+            rid    = str(uuid.uuid4())
             record = AgentRecord(
                 id=rid, agent_id=agent_id,
-                current_token_id=a.get("current_token_id"),
+                current_token_id=token_id,
                 agent_registry=None,
                 name=name, version=version,
-                agent_type=AgentType.JUDGE if a.get("agent_type") == 1 else AgentType.PROVIDER,
-                status=AgentStatus(a.get("status", "active")),
-                owner_address=a.get("owner_address", ""),
-                ipfs_cid=a.get("ipfs_cid"),
-                agent_uri=a.get("agent_uri"),
+                agent_type=AgentType.JUDGE if agent_type_v == 1 else AgentType.PROVIDER,
+                status=AgentStatus(status) if status in _valid_statuses else AgentStatus.ACTIVE,
+                owner_address=owner,
+                ipfs_cid=ipfs_cid,
+                agent_uri=agent_uri,
                 metadata_hash=None,
-                docker_image=a.get("docker_image"),
+                docker_image=(
+                    reg_file.sandbox_config.get("docker_image")
+                    if reg_file and isinstance(reg_file.sandbox_config, dict) else None
+                ),
                 platform_endpoint=None,
-                stake_amount=a.get("stake_amount") or (reg_file.stake_amount if reg_file else 0.0),
-                price_per_task=a.get("price_per_task") or pricing.get("price_per_task", 0.0),
+                stake_amount=reg_file.stake_amount if reg_file else 0.0,
+                price_per_task=pricing.get("price_per_task", 0.0),
                 access_duration_days=pricing.get("access_duration_days", 30),
                 max_calls_per_day=pricing.get("max_calls_per_day", 100),
-                tx_hash=a.get("tx_hash"),
-                registered_at=datetime.fromisoformat(a["registered_at"])
-                              if a.get("registered_at") else None,
+                tx_hash=None,
+                registered_at=None,
                 updated_at=datetime.now(timezone.utc),
                 versions=[AgentVersionInfo(
-                    token_id=a["current_token_id"] or 0, version=version,
-                    agent_uri=a.get("agent_uri") or "", docker_image=a.get("docker_image"),
-                )] if a.get("current_token_id") else [],
+                    token_id=token_id, version=version,
+                    agent_uri=agent_uri or "", docker_image=None,
+                )] if token_id else [],
                 registration_file=reg_file,
             )
 
-            _records[rid]            = record
-            _agent_index[agent_id]   = rid
+            _records[rid]          = record
+            _agent_index[agent_id] = rid
             logger.info("Agent restaure: %s (tokenId=%s owner=%s)",
-                        agent_id, a.get("current_token_id"),
-                        (a.get("owner_address") or "")[:10])
+                        agent_id, token_id, owner[:10] if owner else "")
         except Exception as e:
-            logger.warning("Erreur restauration %s: %s", a.get("agent_id"), e)
+            logger.warning("Erreur restauration %s: %s", agent_id, e)
 
-    logger.info("DB → %d agents charges en memoire", len(agents))
+    logger.info("DB → %d agents charges en memoire", len(rows))
 
 
 # ── Edit helpers (module-level to keep AgentService.edit_agent simple) ────────
@@ -256,16 +348,9 @@ def _persist_edit(
     new_cid: str | None,
     upsert_fn,
 ) -> None:
-    """Write edited fields to DB and update the in-memory _records cache."""
-    db_kw: dict = {"ipfs_cid": new_cid} if new_cid else {}
-    if req.name           is not None: db_kw["name"]           = req.name
-    if req.price_per_task is not None: db_kw["price_per_task"] = req.price_per_task
-    upsert_fn(
-        agent_id=agent_id,
-        registration_id=rid,
-        identity_metadata=new_file.model_dump_json() if new_file else None,
-        **db_kw,
-    )
+    """Update IPFS CID in DB and refresh the in-memory cache (identity is in IPFS)."""
+    if new_cid:
+        upsert_fn(agent_id=agent_id, ipfs_cid=new_cid)
     if rid in _records:
         mem: dict = {"updated_at": datetime.now(timezone.utc)}
         if req.name           is not None: mem["name"]             = req.name
@@ -293,7 +378,6 @@ class AgentService:
         """
         from app.db.identity_repo import get_agent_identity, upsert_agent_identity
         from app.db.telemetry_repo import upsert_telemetry
-        from app.services.blockchain_service import BlockchainService
 
         if req.agent_id in _agent_index or get_agent_identity(req.agent_id):
             raise ValueError(f"agentId '{req.agent_id}' deja utilise.")
@@ -314,20 +398,11 @@ class AgentService:
         # ── 3. Register endpoint ──────────────────────────────────────────────
         endpoint = register_agent_endpoint(req.agent_id)
 
-        # ── 4. DB: pending_signature marker ──────────────────────────────────
+        # ── 4. DB: slim pending marker — identity lives in IPFS ──────────────
         upsert_agent_identity(
             agent_id=req.agent_id,
-            registration_id=rid,
-            owner_address=req.owner_address,
-            docker_image=req.docker_image,
-            agent_type=req.agent_type.to_uint8(),
-            status="pending_signature",
-            tx_hash=None,
-            agent_uri=agent_uri,
             ipfs_cid=cid,
-            price_per_task=req.price_per_task,
-            stake_amount=req.stake_amount,
-            identity_metadata=reg_file.model_dump_json(),
+            status="pending_signature",
         )
         upsert_telemetry(
             req.agent_id,
@@ -435,7 +510,7 @@ class AgentService:
             "current_token_id":  body.token_id,
             "agent_registry":    agent_registry,
             "tx_hash":           body.tx_hash,
-            "status":            AgentStatus.ACTIVE,
+            "status":            AgentStatus.PENDING_INDEX,
             "platform_endpoint": endpoint,
             "registered_at":     datetime.now(timezone.utc),
             "updated_at":        datetime.now(timezone.utc),
@@ -448,21 +523,7 @@ class AgentService:
         })
         _records[body.registration_id] = record
         self._persist_record(record)
-
-        # Calcul embedding BAAI/bge-m3 — non-bloquant, après activation
-        if record.registration_file:
-            try:
-                import asyncio as _asyncio
-                from app.services.matching_service import embed_agent_capabilities
-                meta = record.registration_file.model_dump()
-                loop = _asyncio.get_event_loop()
-                loop.run_in_executor(
-                    None,
-                    lambda: embed_agent_capabilities(record.agent_id, meta),
-                )
-            except Exception as _emb_err:
-                logger.warning("Embedding non calculé pour %s: %s", record.agent_id, _emb_err)
-
+        # Embedding calculé dans /status quand The Graph confirme ACTIVE
         return record
 
     async def new_version(self, req: AgentNewVersionRequest) -> AgentNewVersionResponse:
@@ -474,7 +535,6 @@ class AgentService:
           4. DB: pending_version marker (indexer fills token_id on AgentVersionMinted)
         """
         from app.db.identity_repo import get_agent_identity, upsert_agent_identity
-        from app.services.blockchain_service import BlockchainService
 
         row = get_agent_identity(req.agent_id)
         if not row:
@@ -522,40 +582,21 @@ class AgentService:
         )
         logger.info("IPFS version %s %s → cid=%s", req.agent_id, req.new_version, new_cid)
 
-        # ── Blockchain FIRST ──────────────────────────────────────────────
-        chain       = BlockchainService()
-        tx_hash     = ""
-        unsigned_tx = None
-        if chain.is_available():
-            tx_hash, _ = chain.mint_new_version(req.agent_id, new_uri, req.new_version)
-            if not tx_hash:
-                raise RuntimeError("mint_new_version() returned empty tx_hash")
-            logger.info("mintNewVersion(%s) tx=%s", req.agent_id, tx_hash[:20])
-        else:
-            unsigned_tx = _build_version_tx(req.agent_id, new_uri, req.new_version)
+        # ── Build unsigned_tx — MetaMask du seller signe ─────────────────
+        unsigned_tx = _build_version_tx(req.agent_id, new_uri, req.new_version)
 
-        # ── DB: pending marker — _records updated by indexer only ─────────
+        # ── DB: slim pending marker ───────────────────────────────────────
         upsert_agent_identity(
             agent_id=req.agent_id,
-            registration_id=rid,
-            docker_image=new_docker,
-            status="pending_version" if tx_hash else "pending_signature",
-            tx_hash=tx_hash or None,
-            agent_uri=new_uri,
             ipfs_cid=new_cid,
-            identity_metadata=new_file.model_dump_json(),
+            status="pending_signature",
         )
-        resp_status = "pending_version" if tx_hash else "pending_signature"
         return AgentNewVersionResponse(
             registration_id=rid, agent_id=req.agent_id,
             new_version=req.new_version, new_ipfs_cid=new_cid,
-            new_agent_uri=new_uri, status=resp_status,
-            tx_hash=tx_hash or None, unsigned_tx=unsigned_tx,
-            message=(
-                f"Tx envoyee ({tx_hash[:20]}...). Poll GET /agents/{req.agent_id}/status"
-                if tx_hash
-                else "IPFS OK — signez mintNewVersion() avec votre wallet"
-            ),
+            new_agent_uri=new_uri, status="pending_signature",
+            tx_hash=None, unsigned_tx=unsigned_tx,
+            message="IPFS OK — signez mintNewVersion() avec votre wallet",
         )
 
     async def edit_agent(self, agent_id: str, req: AgentEditRequest) -> dict:
@@ -663,19 +704,10 @@ class AgentService:
     def update_validation_metrics(self, agent_id: str, *, verdict: str, score: float, mode: int = 0) -> None:
         """
         Update reputation after a validation completes.
-        Writes to agent_telemetry AND collaboration_log.
-        mode=0 (solo), mode=1 (pipeline) — used to feed the EigenTrust C matrix.
+        Writes to agent_telemetry only.
+        Collaboration scores are on-chain (record_pipeline_scores) → indexed by The Graph.
         """
-        import uuid
         from app.db.telemetry_repo import get_telemetry, upsert_telemetry
-        from app.db.collaboration_repo import insert_collaboration_score
-        insert_collaboration_score(
-            event_id=f"val-{agent_id}-{uuid.uuid4().hex[:12]}",
-            agent_id=agent_id,
-            task_id=f"task-{uuid.uuid4().hex[:8]}",
-            score=float(score),
-            mode=mode,
-        )
 
         tel       = get_telemetry(agent_id) or {}
         val_count = int(tel.get("val_count") or 0) + 1
@@ -707,27 +739,12 @@ class AgentService:
                     agent_id, new_rate, new_rep)
 
     def _persist_record(self, record: AgentRecord) -> None:
-        """Sync identity fields to DB (identity zone only — no telemetry here)."""
+        """Sync slim identity fields to DB (identity lives in IPFS, telemetry is separate)."""
         from app.db.identity_repo import upsert_agent_identity
         upsert_agent_identity(
             agent_id=record.agent_id,
-            registration_id=record.id,
-            owner_address=record.owner_address,
-            current_token_id=record.current_token_id,
-            docker_image=record.docker_image,
-            status=record.status.value,
-            tx_hash=record.tx_hash,
-            registered_at=record.registered_at.isoformat() if record.registered_at else None,
-            agent_uri=record.agent_uri,
             ipfs_cid=record.ipfs_cid,
-            name=record.name,
-            version=record.version,
-            price_per_task=record.price_per_task,
-            stake_amount=record.stake_amount,
-            identity_metadata=(
-                record.registration_file.model_dump_json()
-                if record.registration_file else None
-            ),
+            status=record.status.value,
         )
 
     async def list_by_owner(self, address: str) -> list[AgentRecord]:

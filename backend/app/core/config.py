@@ -94,6 +94,9 @@ class Settings(BaseSettings):
 
     allowed_origins: list[str] = ["*"]
 
+    # The Graph subgraph endpoint — used instead of blockchain_indexer
+    graph_url: str = "https://api.studio.thegraph.com/query/1753968/agentmarket/v0.2.0"
+
     @field_validator("debug", mode="before")
     @classmethod
     def _parse_debug(cls, value: Any) -> Any:

@@ -423,35 +423,18 @@ class SandboxService:
         )
 
     async def _upload_proxy_trace(self, proxy_trace, task_prompt: str, agent_output: Any) -> str:
-        """Upload proxy trace to IPFS. Always returns a non-null CID (local fallback)."""
+        """Upload proxy trace to Pinata IPFS and return the real CID."""
         data = proxy_trace.to_dict()
-        
-        # Merge task info into the trace bundle for judges
         data["task_prompt"] = task_prompt
         data["agent_output"] = agent_output if isinstance(agent_output, str) else json.dumps(agent_output)
-        
         content = json.dumps(data, indent=2, ensure_ascii=False)
-        try:
-            from app.services.ipfs_service import IPFSService
-            ipfs = IPFSService()
-            cid, _, _ = await ipfs.upload(
-                content,
-                name=f"proxy-trace-{proxy_trace.run_id[:8]}"
-            )
-            logger.info("ProxyTrace IPFS: %s", cid)
-            return cid
-        except Exception as e:
-            logger.warning("IPFS proxy trace upload failed (%s) — using local fallback", e)
-            # Fallback: save locally and return a deterministic local CID
-            import hashlib
-            from pathlib import Path
-            h   = hashlib.sha256(content.encode()).hexdigest()[:40]
-            cid = f"QmLOCAL{h}"
-            base = Path(settings.storage_path) / "ipfs_local"
-            base.mkdir(parents=True, exist_ok=True)
-            (base / f"{cid}.json").write_text(content, encoding="utf-8")
-            logger.info("ProxyTrace saved locally: %s", cid)
-            return cid
+        from app.services.ipfs_service import IPFSService
+        cid, _, _ = await IPFSService().upload(
+            content,
+            name=f"proxy-trace-{proxy_trace.run_id[:8]}"
+        )
+        logger.info("ProxyTrace IPFS: %s", cid)
+        return cid
 
     async def _run_docker(self, cmd, timeout):
         loop = asyncio.get_event_loop()

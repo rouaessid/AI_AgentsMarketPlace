@@ -19,7 +19,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.db.identity_repo import get_agent_identity, get_all_agent_identities
-from app.db.reputation_repo import get_aggregated_score, get_reputation_signals
+from app.services.graph_client import (
+    get_aggregated_reputation as get_aggregated_score,
+    get_reputation_events as get_reputation_signals,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reputation", tags=["reputation"])
@@ -167,7 +170,7 @@ async def get_reputation(agent_id: str):
         ]
 
         if agents:
-            from app.db.collaboration_repo import get_solo_scores, get_pipeline_scores
+            from app.services.graph_client import get_solo_scores, get_pipeline_scores
             p_overrides = {}
             for a in agents:
                 scores = get_solo_scores(a["agent_id"]) or get_pipeline_scores(a["agent_id"])
@@ -177,15 +180,25 @@ async def get_reputation(agent_id: str):
                     if recent:
                         p_overrides[a["agent_id"]] = sum(recent) / len(recent)
 
-            result = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
-            agent_score = result.scores_by_agent.get(agent_id)
-            if agent_score:
+            # Only compute EigenTrust if there are real signals (avoid 1/n inflation)
+            has_real_signals = bool(raw_signals) or bool(p_overrides)
+            if not has_real_signals:
                 eigentrust_data = {
-                    **agent_score,
-                    "converged":  result.converged,
-                    "iterations": result.iterations,
+                    "pre_trust": 0.0, "global_trust": 0.0,
+                    "user_feedback": 0.0, "final_score": 0.0,
+                    "converged": True, "iterations": 0,
                     "agents_in_network": len(agents),
                 }
+            else:
+                result = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
+                agent_score = result.scores_by_agent.get(agent_id)
+                if agent_score:
+                    eigentrust_data = {
+                        **agent_score,
+                        "converged":  result.converged,
+                        "iterations": result.iterations,
+                        "agents_in_network": len(agents),
+                    }
     except Exception as e:
         logger.warning("EigenTrust computation failed (non-blocking): %s", e)
 
@@ -217,7 +230,7 @@ async def get_network_scores():
         if not agents:
             return JSONResponse({"agents": {}, "message": "Aucun agent enregistré on-chain"})
 
-        from app.db.collaboration_repo import get_solo_scores
+        from app.services.graph_client import get_solo_scores
         p_overrides = {}
         for a in agents:
             scores = get_solo_scores(a["agent_id"])
