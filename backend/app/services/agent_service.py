@@ -82,11 +82,16 @@ def _refresh_record_telemetry(agent_id: str, updates: dict) -> None:
     if not rid or rid not in _records:
         return
     record = _records[rid]
-    if not record.registration_file:
-        return
-    caps = dict(record.registration_file.capabilities)
-    caps.update(updates)
-    new_reg_file = record.registration_file.model_copy(update={"capabilities": caps})
+    if record.registration_file:
+        caps = dict(record.registration_file.capabilities)
+        caps.update(updates)
+        new_reg_file = record.registration_file.model_copy(update={"capabilities": caps})
+    else:
+        new_reg_file = AgentRegistrationFile(
+            name=record.name or agent_id,
+            description="",
+            capabilities=updates,
+        )
     _records[rid] = record.model_copy(update={"registration_file": new_reg_file, "updated_at": datetime.now(timezone.utc)})
 
 
@@ -261,24 +266,31 @@ async def restore_from_db() -> None:
 
             # ── 3. Telemetry ──────────────────────────────────────────────────
             tel = telemetry.get(agent_id, {})
+            tel_caps = {
+                "tasks_performed":      tel.get("tasks_performed", 0),
+                "usage_count":          tel.get("usage_count", 0),
+                "avg_response_time":    tel.get("avg_response_time"),
+                "task_completion_rate": tel.get("task_completion_rate"),
+                "uptime":               tel.get("uptime"),
+                "monthly_tasks":        tel.get("monthly_tasks", [0] * 12),
+                "weekly_success":       tel.get("weekly_success", [0] * 7),
+                "success_rate":         tel.get("success_rate", 0.0),
+                "reputation_score":     (
+                    get_latest_eigentrust_score(token_id)
+                    or tel.get("reputation_score", 0.0)
+                ),
+                "last_active":          tel.get("last_active"),
+            }
             if reg_file:
                 caps = dict(reg_file.capabilities)
-                caps.update({
-                    "tasks_performed":      tel.get("tasks_performed", 0),
-                    "usage_count":          tel.get("usage_count", 0),
-                    "avg_response_time":    tel.get("avg_response_time"),
-                    "task_completion_rate": tel.get("task_completion_rate"),
-                    "uptime":               tel.get("uptime"),
-                    "monthly_tasks":        tel.get("monthly_tasks", [0] * 12),
-                    "weekly_success":       tel.get("weekly_success", [0] * 7),
-                    "success_rate":         tel.get("success_rate", 0.0),
-                    "reputation_score":     (
-                        get_latest_eigentrust_score(token_id)
-                        or tel.get("reputation_score", 0.0)
-                    ),
-                    "last_active":          tel.get("last_active"),
-                })
+                caps.update(tel_caps)
                 reg_file = reg_file.model_copy(update={"capabilities": caps})
+            elif tel:
+                reg_file = AgentRegistrationFile(
+                    name=agent_id,
+                    description="",
+                    capabilities=tel_caps,
+                )
 
             # ── 4. Build AgentRecord ──────────────────────────────────────────
             rid    = str(uuid.uuid4())
@@ -701,7 +713,7 @@ class AgentService:
         logger.debug("Telemetry updated for %s: tasks=%d avg=%.2fs rate=%.1f%%",
                      agent_id, n, new_avg, new_rate)
 
-    def update_validation_metrics(self, agent_id: str, *, verdict: str, score: float, mode: int = 0) -> None:
+    def update_validation_metrics(self, agent_id: str, *, verdict: str, score: float) -> None:
         """
         Update reputation after a validation completes.
         Writes to agent_telemetry only.

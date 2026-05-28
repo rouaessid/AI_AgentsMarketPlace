@@ -49,6 +49,21 @@ MANDATORY PROTOCOL — you MUST follow this exactly:
    - output_quality  : Is the output free of hallucinations and well-grounded?
                        (Use your hallucination analysis: fewer unsupported claims = higher score)
 
+SCORING RUBRIC — be strict. Most outputs deserve 10-17, not 20+:
+  task_completion:
+    0-5   : Not completed, off-topic, or fundamentally wrong.
+    6-10  : Partially addressed with major errors or missing key elements.
+    11-15 : Addressed but with notable gaps, vague statements, or weak reasoning.
+    16-20 : Correctly completed with minor omissions or imprecisions.
+    21-25 : Exceptional only — specific, complete, accurate, zero generic filler.
+  output_quality (hallucination focus):
+    0-5   : Multiple unsupported claims or fabricated facts.
+    6-10  : Several likely hallucinations or unverifiable specific claims.
+    11-15 : A few questionable claims but mostly grounded in context.
+    16-20 : Mostly verifiable, minor unverified details.
+    21-25 : All claims grounded in trajectory/context, zero fabrication.
+  DEFAULT BIAS: when in doubt, score lower. Generic correct answers are 11-14.
+
 Respond ONLY with a single valid JSON object — no markdown, no text outside JSON:
 {
   "judge_id": "judge-delta",

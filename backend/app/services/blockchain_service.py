@@ -85,52 +85,8 @@ class BlockchainService:
             raise RuntimeError(f"TX reverted: {tx_hash.hex()}")
         return tx_hash.hex()
 
-    def record_pipeline_scores(
-        self,
-        task_id:   str,
-        agent_ids: list[str],
-        scores:    list[float],
-    ) -> str:
-        """
-        Appelle ValidationRegistry.recordPipelineScores() après l'exécution d'un pipeline.
-        Action automatique de la plateforme — pas une action utilisateur.
-        Retourne tx_hash_hex ou "" en cas d'échec.
-        """
-        addr = settings.validation_registry_address
-        if not addr:
-            logger.warning("VALIDATION_REGISTRY_ADDRESS not set — skip recordPipelineScores")
-            return ""
-        if not settings.platform_private_key:
-            logger.warning("PLATFORM_PRIVATE_KEY not set — skip recordPipelineScores")
-            return ""
-        if not self.is_available():
-            return ""
-        if not agent_ids or not scores or len(agent_ids) != len(scores):
-            return ""
-
-        _abi = [{
-            "inputs": [
-                {"name": "agentIds_", "type": "string[]"},
-                {"name": "taskId_",   "type": "string"},
-                {"name": "scores_",   "type": "uint8[]"},
-            ],
-            "name": "recordPipelineScores",
-            "outputs": [],
-            "stateMutability": "nonpayable",
-            "type": "function",
-        }]
-
-        try:
-            uint8_scores = [max(0, min(100, int(round(s)))) for s in scores]
-            contract = self.w3.eth.contract(
-                address=Web3.to_checksum_address(addr), abi=_abi
-            )
-            tx_hash = self._send(
-                contract.functions.recordPipelineScores(agent_ids, task_id, uint8_scores)
-            )
-            logger.info("recordPipelineScores: task=%s agents=%s tx=%s",
-                        task_id, agent_ids, tx_hash[:20])
-            return tx_hash
-        except Exception as exc:
-            logger.error("record_pipeline_scores failed: %s", exc)
-            return ""
+    # DEAD CODE — record_pipeline_scores() n'est jamais appelé.
+    # Le pipeline utilise run_validation(mode=1) par agent → finaliseValidation() →
+    # ScoreRecorded(mode=1) on-chain, indexé par The Graph.
+    # Cette méthode était prévue comme raccourci batch mais n'a jamais été intégrée.
+    # def record_pipeline_scores(self, task_id, agent_ids, scores): ...

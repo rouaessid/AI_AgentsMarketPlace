@@ -331,6 +331,15 @@ async def _validate_per_agent(result: PipelineResult) -> None:
         finished_at=datetime.now(timezone.utc).isoformat(),
     )
 
+    # ScoreRecorded(mode=1) vient d'être indexé par The Graph.
+    # Déclenche le recalcul EigenTrust pour mettre à jour la matrice C.
+    try:
+        from app.services.eigentrust_sync import sync_eigentrust_onchain
+        import asyncio as _asyncio
+        _asyncio.create_task(sync_eigentrust_onchain())
+    except Exception as _e:
+        logger.warning("EigenTrust sync post-pipeline échoué: %s", _e)
+
 
 async def _run_one_validation(
     pipeline_task_id: str,

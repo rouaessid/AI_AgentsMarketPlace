@@ -47,46 +47,57 @@ _CHALLENGE_STORE: dict[str, str] = {}
 
 def _judge_env(agent_id: str) -> dict:
     """Retourne les variables d'environnement à injecter dans le container du juge.
-    Les clés viennent de la plateforme (.env) — jamais du buyer.
 
-    Distribution providers (indépendance des rate limits) :
-      alpha   → Groq        (JUDGE_ALPHA_GROQ_KEY)
-      beta    → OpenRouter  (JUDGE_BETA_OR_KEY)
-      gamma   → OpenRouter  (JUDGE_GAMMA_OR_KEY, fallback JUDGE_BETA_OR_KEY)
-      delta   → Groq        (JUDGE_DELTA_GROQ_KEY)
-      epsilon → OpenRouter  (JUDGE_EPSILON_OR_KEY)
+    Chaque juge a son propre provider pour éviter le partage de rate limits :
+      alpha   → Groq        (LLM_BASE_URL=groq, JUDGE_ALPHA_GROQ_KEY)
+      beta    → OpenRouter  (LLM_BASE_URL=openrouter, JUDGE_BETA_OR_KEY)
+                fallback    → Groq (JUDGE_BETA_GROQ_KEY)
+      gamma   → Groq        (LLM_BASE_URL=groq, JUDGE_GAMMA_GROQ_KEY)
+      delta   → Gemini      (LLM_BASE_URL=gemini, JUDGE_DELTA_GEMINI_KEY)
+                fallback    → Groq (JUDGE_DELTA_GROQ_KEY)
+      epsilon → OpenRouter  (LLM_BASE_URL=openrouter, JUDGE_EPSILON_OR_KEY)
+                fallback    → Groq (JUDGE_EPSILON_GROQ_KEY)
     """
+    _GROQ_URL  = "https://api.groq.com/openai/v1"
+    _OR_URL    = "https://openrouter.ai/api/v1"
+    _GEM_URL   = "https://generativelanguage.googleapis.com/v1beta/openai"
+    _GROQ_MDL  = "llama-3.1-8b-instant"
+    _OR_MDL    = "meta-llama/llama-3.1-8b-instruct"
+
     env = {"IPFS_GATEWAY": "http://host.docker.internal:8000/ipfs"}
 
-    if agent_id == "judge-beta":
+    if agent_id == "judge-alpha":
+        key = settings.judge_alpha_groq_key or settings.groq_api_key
+        env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
+        if settings.judge_alpha_tavily_key:
+            env["TAVILY_API_KEY"] = settings.judge_alpha_tavily_key
+
+    elif agent_id == "judge-beta":
         if settings.judge_beta_or_key:
-            env["GROQ_API_KEY"] = settings.judge_beta_or_key
-        return env
+            env.update({"GROQ_API_KEY": settings.judge_beta_or_key, "LLM_BASE_URL": _OR_URL, "LLM_MODEL": _OR_MDL})
+        else:
+            key = settings.judge_beta_groq_key or settings.groq_api_key
+            env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
 
-    if agent_id == "judge-epsilon":
+    elif agent_id == "judge-gamma":
+        key = settings.judge_gamma_groq_key or settings.groq_api_key
+        env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
+
+    elif agent_id == "judge-delta":
+        if settings.judge_delta_gemini_key:
+            env.update({"GROQ_API_KEY": settings.judge_delta_gemini_key, "LLM_BASE_URL": _GEM_URL, "LLM_MODEL": "gemini-2.5-flash"})
+        else:
+            key = settings.judge_delta_groq_key or settings.groq_api_key
+            env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
+
+    elif agent_id == "judge-epsilon":
         if settings.judge_epsilon_or_key:
-            env["GROQ_API_KEY"] = settings.judge_epsilon_or_key
-        return env
+            env.update({"GROQ_API_KEY": settings.judge_epsilon_or_key, "LLM_BASE_URL": _OR_URL, "LLM_MODEL": _OR_MDL})
+        else:
+            key = settings.judge_epsilon_groq_key or settings.groq_api_key
+            env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
 
-    if agent_id == "judge-gamma":
-        key = settings.judge_gamma_or_key or settings.judge_beta_or_key
-        if key:
-            env["GROQ_API_KEY"] = key
-        return env
-
-    if agent_id == "judge-delta":
-        key = settings.judge_delta_groq_key or settings.groq_api_key
-        if key:
-            env["GROQ_API_KEY"] = key
-        return env
-
-    # judge-alpha → Groq
-    groq_key = settings.judge_alpha_groq_key or settings.groq_api_key
-    if groq_key:
-        env["GROQ_API_KEY"] = groq_key
-    if settings.judge_alpha_tavily_key:
-        env["TAVILY_API_KEY"] = settings.judge_alpha_tavily_key
-    return env
+    return {k: v for k, v in env.items() if v}  # drop empty values
 
 
 # ── Protocol helpers — plateforme side ───────────────────────────────────────
@@ -301,10 +312,18 @@ async def _run_validation_inner(
             agent_id,
             verdict=consensus,
             score=float(aggregated_score),
-            mode=mode,
         )
     except Exception as e:
         logger.warning("[val] Could not update agent reputation metrics: %s", e)
+
+    # ── 7. Déclenche EigenTrust sync (solo mode=0 et pipeline mode=1) ────
+    # ScoreRecorded vient d'être émis on-chain → The Graph va l'indexer.
+    # Le sync lit les nouveaux scores et met à jour tag1="eigenTrust" on-chain.
+    try:
+        from app.services.eigentrust_sync import sync_eigentrust_onchain
+        asyncio.create_task(sync_eigentrust_onchain())
+    except Exception as e:
+        logger.warning("[val] EigenTrust sync non déclenché: %s", e)
 
     # ── 7. Update judge agreement rates (DB) ─────────────────────────────
     # JudgeScoreUpdated est émis on-chain par ValidationRegistry._applyOutcomes()

@@ -99,11 +99,18 @@ export const agentApi = {
       .then(r => r.ok ? r.json() : null)
       .catch(() => null),
 
-  submitFeedback: (agentId, score, comment = '') =>
-    fetchJSON(`/api/v1/reputation/${agentId}/feedback`, {
+  getFeedbackInfo: (agentId, score) =>
+    fetchJSON(`/api/v1/agents/${agentId}/feedback-info?score=${score}`),
+
+  // DEAD — remplacé par getFeedbackInfo + eth_sendTransaction (MetaMask direct)
+  // submitFeedback: (agentId, score, comment) => ...
+
+  // Notifie le backend après un tx MetaMask confirmé → déclenche recalcul EigenTrust
+  notifyFeedback: (agentId, body) =>
+    fetchJSON(`/api/v1/reputation/${agentId}/feedback-notify`, {
       method: 'POST',
-      body: JSON.stringify({ score, comment }),
-    }),
+      body: JSON.stringify(body),
+    }).catch(() => {}),
 
   simulateValidation: (agentId, score = 80) =>
     fetchJSON('/api/v1/reputation/debug/simulate-validation', {

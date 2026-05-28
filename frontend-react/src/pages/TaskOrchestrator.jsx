@@ -791,7 +791,22 @@ function StepResultCard({ step, isDone, index, subtask }) {
     if (!stars || submitting || rated) return
     setSubmitting(true); setRateErr('')
     try {
-      await agentApi.submitFeedback(step.agent_id, stars)
+      if (!window.ethereum) throw new Error('MetaMask non détecté')
+
+      // Encode giveFeedback(tag1="starred") via backend, signe via MetaMask
+      const info = await agentApi.getFeedbackInfo(step.agent_id, stars)
+      if (!info.reputation_address || info.call_data === '0x')
+        throw new Error('ReputationRegistry non configuré')
+
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      const txHash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: accounts[0], to: info.reputation_address, data: info.call_data }],
+      })
+
+      // Notifie le backend pour déclencher le recalcul EigenTrust
+      await agentApi.notifyFeedback(step.agent_id, { tx_hash: txHash, stars }).catch(() => {})
+
       setRated(true)
     } catch (e) {
       setRateErr(e.message)

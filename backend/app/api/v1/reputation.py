@@ -64,51 +64,35 @@ async def simulate_validation(body: SimulateValidationBody):
     if not token_id:
         raise HTTPException(400, detail=_NOT_ON_CHAIN)
 
-    from app.services.blockchain_service import BlockchainService
-    svc = BlockchainService()
-    tx_hash = svc.give_feedback(token_id, body.score, 0, "successRate", "VALID_SIM")
-
-    if not tx_hash:
-        raise HTTPException(503, detail="Blockchain non disponible ou giveFeedback échoué")
-
     from app.services.eigentrust_sync import sync_eigentrust_onchain
     _fire(sync_eigentrust_onchain())
 
-    return {"status": "ok", "tx_hash": tx_hash, "simulated_score": body.score, "token_id": token_id}
+    return {"status": "ok", "tx_hash": "", "simulated_score": body.score, "token_id": token_id}
 
 
-# ── POST /{agent_id}/feedback — user star rating ──────────────────────────────
+# ── POST /{agent_id}/feedback-notify — déclenche EigenTrust après tx MetaMask ──
+# L'écriture on-chain (giveFeedback tag1="starred") est faite par l'utilisateur
+# via MetaMask côté frontend. Ce endpoint reçoit juste le tx_hash de confirmation
+# et déclenche le recalcul EigenTrust en background.
 
-@router.post("/{agent_id}/feedback")
-async def submit_feedback(agent_id: str, body: FeedbackBody):
+class FeedbackNotifyBody(BaseModel):
+    tx_hash: str
+    stars:   int = 0
+
+@router.post("/{agent_id}/feedback-notify")
+async def feedback_notify(agent_id: str, body: FeedbackNotifyBody):
     """
-    User submits a star rating (1-5) for an agent.
-    Writes NewFeedback(tag1="starred", value=score×20) on-chain, then triggers EigenTrust sync.
+    Appelé par le frontend après qu'un giveFeedback(tag1='starred') a été signé
+    via MetaMask et confirmé on-chain. Déclenche le recalcul EigenTrust.
     """
-    if not 1 <= body.score <= 5:
-        raise HTTPException(400, detail="score doit être entre 1 et 5")
-
     identity = get_agent_identity(agent_id)
     if not identity:
         raise HTTPException(404, detail=f"Agent {agent_id!r} introuvable")
 
-    token_id = identity.get("current_token_id")
-    if not token_id:
-        raise HTTPException(400, detail=_NOT_ON_CHAIN)
-
-    from app.services.blockchain_service import BlockchainService
-    svc = BlockchainService()
-    value   = body.score * 20  # 1-5 → 20-100
-    comment = body.comment[:64] if body.comment else ""
-    tx_hash = svc.give_feedback(token_id, value, 0, "starred", comment)
-
-    if not tx_hash:
-        raise HTTPException(503, detail="Blockchain non disponible ou feedback échoué")
-
     from app.services.eigentrust_sync import sync_eigentrust_onchain
     _fire(sync_eigentrust_onchain())
 
-    return {"status": "ok", "tx_hash": tx_hash, "stars": body.score, "value": value}
+    return {"status": "ok", "tx_hash": body.tx_hash}
 
 
 # ── GET /{agent_id} ───────────────────────────────────────────────────────────

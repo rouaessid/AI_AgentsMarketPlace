@@ -40,6 +40,15 @@ Mapping to output dimensions:
 - task_completion = floor((relevance + completeness + prompt_adherence) / 3)   [0-25]
 - output_quality  = floor((accuracy + format) / 2)                             [0-25]
 
+SCORING RUBRIC — be strict on each internal dimension (0-25):
+  0-5   : Completely missing or wrong.
+  6-10  : Major deficiencies — significant gaps, errors, or vague content.
+  11-15 : Acceptable — meets basic expectations but lacks depth or specifics.
+  16-20 : Good — clearly addresses criteria with minor issues.
+  21-25 : Exceptional only — specific, verifiable, zero filler, exceeds expectations.
+  DEFAULT BIAS: Most outputs deserve 10-16 per dimension. Only award 20+ for outputs
+  with concrete, non-trivial, verifiable content. Generic correct answers score 11-14.
+
 MANDATORY PROTOCOL — you MUST follow this exactly:
 
 1. The trace contains a field "challenge_token". Copy its value VERBATIM into

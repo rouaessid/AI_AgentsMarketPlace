@@ -58,6 +58,22 @@ MANDATORY PROTOCOL — you MUST follow this exactly:
    - task_completion : Did the agent correctly answer the task?
    - output_quality  : Is the output useful, accurate, and free of hallucinations?
 
+SCORING RUBRIC — be strict. Most outputs deserve 10-17, not 20+:
+  task_completion:
+    0-5   : Not completed, off-topic, or fundamentally wrong.
+    6-10  : Partially addressed with major errors or missing key elements.
+    11-15 : Addressed but with notable gaps, vague statements, or weak reasoning.
+    16-20 : Correctly completed with minor omissions or imprecisions.
+    21-25 : Exceptional only — specific, complete, accurate, zero generic filler.
+  output_quality:
+    0-5   : Unusable — hallucinations, incoherent, or purely generic filler.
+    6-10  : Low quality — vague, generic, or likely hallucinated facts.
+    11-15 : Acceptable — some specifics but notable filler or minor inaccuracies.
+    16-20 : Good — mostly accurate and structured with clear reasoning.
+    21-25 : Excellent only — concrete verifiable facts, no filler, well-structured.
+  DEFAULT BIAS: when in doubt, score lower. A correct but generic answer is 11-14.
+  Reserve 20+ only when the output contains specific, verifiable, non-trivial information.
+
 Respond ONLY with a single valid JSON object — no markdown, no text outside JSON:
 {
   "judge_id": "<your judge id>",

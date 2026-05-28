@@ -711,8 +711,20 @@ function RatingForm({ agentId, onSubmit, accent, validated }) {
     if (!stars) return
     setLoading(true); setError(''); setResult(null)
     try {
-      const res = await agentApi.submitFeedback(agentId, stars, comment)
-      setResult({ stars, tx: res.tx_hash })
+      if (!window.ethereum) throw new Error('MetaMask non détecté')
+
+      const info = await agentApi.getFeedbackInfo(agentId, stars)
+      if (!info.reputation_address || info.call_data === '0x')
+        throw new Error('Contrat ReputationRegistry non configuré')
+
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      const from = accounts[0]
+
+      const txHash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from, to: info.reputation_address, data: info.call_data }],
+      })
+      setResult({ stars, tx: txHash })
       setStars(0); setComment('')
       onSubmit?.()
     } catch (e) { setError(e.message) }

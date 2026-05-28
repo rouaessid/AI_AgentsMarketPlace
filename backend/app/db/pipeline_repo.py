@@ -73,8 +73,8 @@ def reset_stale_pipeline_tasks() -> int:
 
 def list_pipeline_tasks(buyer_wallet: str | None = None, limit: int = 50) -> list[dict]:
     with get_session() as s:
-        q = s.query(PipelineTask).order_by(PipelineTask.created_at.desc()).limit(limit)
+        q = s.query(PipelineTask).order_by(PipelineTask.created_at.desc())
         if buyer_wallet:
             q = q.filter(PipelineTask.buyer_wallet == buyer_wallet)
-        rows = q.all()
+        rows = q.limit(limit).all()
         return [{c.name: getattr(r, c.name) for c in PipelineTask.__table__.columns} for r in rows]
