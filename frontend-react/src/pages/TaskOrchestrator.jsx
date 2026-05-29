@@ -1299,6 +1299,15 @@ export default function TaskOrchestrator() {
     try {
       let txHash = ''
       if (!isFree && info?.contract_address && window.ethereum) {
+        // Switch to Hardhat Local before payment
+        try {
+          await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x7A69' }] })
+        } catch (sw) {
+          if (sw.code === 4902) {
+            await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x7A69', chainName: 'Hardhat Local', rpcUrls: ['http://127.0.0.1:8545'], nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 } }] })
+          }
+        }
+
         const priceWei = BigInt(info.total_eth_wei || '0')
         let gasPrice = '0x1'
         try {

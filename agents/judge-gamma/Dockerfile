@@ -28,8 +28,8 @@ COPY agent.py .
 
 ENV AGENT_ID=judge-gamma
 ENV AGENT_NAME="Judge Gamma"
-ENV LLM_MODEL=deepseek/deepseek-v4-flash:free
-ENV LLM_BASE_URL=https://openrouter.ai/api/v1
+ENV LLM_MODEL=mistral-small-latest
+ENV LLM_BASE_URL=https://api.mistral.ai/v1
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 

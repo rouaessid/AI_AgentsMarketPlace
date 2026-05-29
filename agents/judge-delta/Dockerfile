@@ -17,8 +17,8 @@ COPY agent.py .
 
 ENV AGENT_ID=judge-delta
 ENV AGENT_NAME="Judge Delta"
-ENV LLM_MODEL=llama-3.1-8b-instant
-ENV LLM_BASE_URL=https://api.groq.com/openai/v1
+ENV LLM_MODEL=mistral-small-latest
+ENV LLM_BASE_URL=https://api.mistral.ai/v1
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 

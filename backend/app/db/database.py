@@ -24,7 +24,7 @@ settings = get_settings()
 # ── Engine ─────────────────────────────────────────────────────────────────────
 _db_path     = Path(settings.storage_path) / "agentmarket.db"
 _sqlite_url  = f"sqlite:///{_db_path}"
-DATABASE_URL = settings.database_url if settings.database_url else _sqlite_url
+DATABASE_URL = settings.active_database_url if settings.active_database_url else _sqlite_url
 
 _is_postgres = DATABASE_URL.startswith("postgresql")
 

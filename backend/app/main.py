@@ -173,7 +173,15 @@ async def health():
 
 @app.get("/ipfs/{cid}", tags=["ipfs"])
 async def serve_local_ipfs(cid: str):
-    """Serve local IPFS files so judge containers can fetch traces via host.docker.internal."""
+    """Serve IPFS files — Pinata if USE_IPFS=true, local storage otherwise."""
+    if settings.use_ipfs:
+        import httpx
+        gateway_url = f"{settings.ipfs_gateway}/{cid}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(gateway_url)
+            if resp.status_code == 200:
+                return JSONResponse(resp.json())
+        raise HTTPException(404, detail=f"CID {cid} not found on Pinata")
     base = Path(settings.storage_path) / "ipfs_local"
     f = base / f"{cid}.json"
     if not f.exists():

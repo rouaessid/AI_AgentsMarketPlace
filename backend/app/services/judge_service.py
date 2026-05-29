@@ -46,32 +46,34 @@ def _judge_env(agent_id: str) -> dict:
     Les clés viennent de la plateforme (.env) — jamais du buyer.
 
     Distribution providers (indépendance des rate limits) :
-      alpha   → Groq        (JUDGE_ALPHA_GROQ_KEY)
-      beta    → OpenRouter  (JUDGE_BETA_OR_KEY)
-      gamma   → OpenRouter  (JUDGE_GAMMA_OR_KEY, fallback JUDGE_BETA_OR_KEY)
-      delta   → Groq        (JUDGE_DELTA_GROQ_KEY)
-      epsilon → OpenRouter  (JUDGE_EPSILON_OR_KEY)
+      alpha   → Groq      (JUDGE_ALPHA_GROQ_KEY)
+      beta    → Cerebras  (JUDGE_BETA_CEREBRAS_KEY)
+      gamma   → Groq      (JUDGE_GAMMA_GROQ_KEY)
+      delta   → Groq      (JUDGE_DELTA_GROQ_KEY)
+      epsilon → Cerebras  (JUDGE_EPSILON_CEREBRAS_KEY)
     """
     env = {"IPFS_GATEWAY": "http://host.docker.internal:8000/ipfs"}
 
     if agent_id == "judge-beta":
-        if settings.judge_beta_or_key:
-            env["GROQ_API_KEY"] = settings.judge_beta_or_key
+        key = settings.judge_beta_groq_key or settings.groq_api_key
+        if key:
+            env["GROQ_API_KEY"] = key
         return env
 
     if agent_id == "judge-epsilon":
-        if settings.judge_epsilon_or_key:
-            env["GROQ_API_KEY"] = settings.judge_epsilon_or_key
+        key = settings.judge_epsilon_groq_key or settings.groq_api_key
+        if key:
+            env["GROQ_API_KEY"] = key
         return env
 
     if agent_id == "judge-gamma":
-        key = settings.judge_gamma_or_key or settings.judge_beta_or_key
+        key = settings.judge_gamma_mistral_key
         if key:
             env["GROQ_API_KEY"] = key
         return env
 
     if agent_id == "judge-delta":
-        key = settings.judge_delta_groq_key or settings.groq_api_key
+        key = settings.judge_delta_mistral_key
         if key:
             env["GROQ_API_KEY"] = key
         return env
@@ -88,7 +90,21 @@ def _judge_env(agent_id: str) -> dict:
 # ── Protocol helpers — plateforme side ───────────────────────────────────────
 
 def _load_trace_local(proxy_cid: str) -> dict:
-    """Lit la trace depuis le stockage local IPFS."""
+    """Charge la trace : Pinata si USE_IPFS=true, sinon stockage local."""
+    if settings.use_ipfs:
+        import httpx
+        url = f"{settings.ipfs_gateway}/{proxy_cid}"
+        try:
+            with httpx.Client(timeout=20) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+                logger.info("[val] Trace chargée depuis Pinata CID=%s", proxy_cid)
+                return data
+        except Exception as e:
+            logger.warning("[val] Pinata fetch échoué CID=%s: %s", proxy_cid, e)
+            return {}
+
     base = Path(settings.storage_path) / "ipfs_local"
     f = base / f"{proxy_cid}.json"
     if f.exists():
@@ -107,13 +123,40 @@ def _load_trace_local(proxy_cid: str) -> dict:
     return {}
 
 
-def _embed_challenge_in_trace(proxy_cid: str, trace: dict, token: str) -> None:
-    """Injecte le challenge_token dans le fichier trace en place."""
+def _embed_challenge_in_trace(proxy_cid: str, trace: dict, token: str) -> str:
+    """Injecte le challenge_token dans la trace et re-upload sur Pinata si USE_IPFS=true.
+    Retourne le CID final à envoyer aux juges."""
     trace["challenge_token"] = token
+
+    if settings.use_ipfs:
+        import asyncio, json as _json
+        from app.services.ipfs_service import IPFSService
+        async def _reupload():
+            ipfs = IPFSService()
+            cid, _, _ = await ipfs.upload(
+                _json.dumps(trace, ensure_ascii=False),
+                name=f"trace-{proxy_cid[:12]}-challenge"
+            )
+            return cid
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, _reupload())
+                    return future.result(timeout=15)
+            else:
+                return loop.run_until_complete(_reupload())
+        except Exception as e:
+            logger.warning("Re-upload trace avec challenge_token échoué: %s", e)
+            return proxy_cid
+
+    # Local storage
     base = Path(settings.storage_path) / "ipfs_local"
     f = base / f"{proxy_cid}.json"
     if f.exists():
         f.write_text(json.dumps(trace, ensure_ascii=False), encoding="utf-8")
+    return proxy_cid
 
 
 def _verify_challenge_token(response_token: str, expected_token: str) -> bool:
@@ -219,7 +262,7 @@ async def _run_validation_inner(
     # ── 1. Protocole de vérification ─────────────────────────────────────
     real_trace      = _load_trace_local(proxy_cid)
     challenge_token = secrets.token_hex(8)
-    _embed_challenge_in_trace(proxy_cid, real_trace, challenge_token)
+    judge_cid       = _embed_challenge_in_trace(proxy_cid, real_trace, challenge_token)
     # traceHash committed on-chain before judges run — prevents post-hoc trace manipulation
     trace_bytes = json.dumps(real_trace, ensure_ascii=False, sort_keys=True).encode()
     trace_hash  = bytes(Web3.keccak(trace_bytes))  # bytes32
@@ -229,7 +272,7 @@ async def _run_validation_inner(
     try:
         results, selected_judges = await asyncio.wait_for(
             _run_judges(
-                proxy_cid,
+                judge_cid,
                 task_description=task_description,
                 challenge_token=challenge_token,
                 real_trace=real_trace,
@@ -459,7 +502,7 @@ def _emit_judge_accuracies_onchain(results: list[JudgeResult]) -> None:
     from app.db.judge_reputation_repo import get_judge_reputation
 
     try:
-        w3  = Web3(Web3.HTTPProvider(settings.rpc_url))
+        w3  = Web3(Web3.HTTPProvider(settings.active_rpc_url))
         rep = w3.eth.contract(
             address=Web3.to_checksum_address(settings.reputation_registry_address),
             abi=_REPUTATION_ABI,
@@ -565,6 +608,7 @@ async def _run_one_judge(
                 task_id=f"judge-{uuid.uuid4().hex[:8]}",
                 agent_id=judge_record.agent_id,
                 task_prompt=proxy_cid,
+                task_params={"challenge_token": challenge_token},
             ),
             env_vars=_judge_env(judge_record.agent_id),
             use_proxy=False,
@@ -670,7 +714,7 @@ def _build_wallet_key_map() -> dict[str, str]:
     """
     result: dict[str, str] = {}
 
-    for raw_wallet, raw_key in settings.judge_wallet_keys.items():
+    for raw_wallet, raw_key in settings.active_judge_wallet_keys.items():
         result[raw_wallet.lower()] = raw_key
 
     from eth_account import Account as EthAccount
@@ -743,7 +787,7 @@ def _onchain_flow_sync(
 ) -> None:
     """Synchronous on-chain flow — runs in a thread via run_in_executor."""
     try:
-        w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 10}))
+        w3 = Web3(Web3.HTTPProvider(settings.active_rpc_url, request_kwargs={"timeout": 10}))
         registry = w3.eth.contract(
             address=Web3.to_checksum_address(settings.validation_registry_address),
             abi=_VALIDATION_ABI,
@@ -865,10 +909,9 @@ def _ensure_local_dev_judge_funding(
 
 
 def _is_local_dev_chain(w3: Web3) -> bool:
-    endpoint = (settings.rpc_url or "").lower()
-    return w3.eth.chain_id == settings.chain_id == 31337 and (
-        "127.0.0.1" in endpoint or "localhost" in endpoint
-    )
+    endpoint = (settings.active_rpc_url or "").lower()
+    is_local = "127.0.0.1" in endpoint or "localhost" in endpoint
+    return is_local and w3.eth.chain_id == 31337
 
 
 def _send_eth(w3: Web3, private_key: str, to_address: str, value_wei: int) -> str:

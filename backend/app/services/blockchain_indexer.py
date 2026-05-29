@@ -306,7 +306,7 @@ class BlockchainIndexer:
     @property
     def w3(self) -> Web3:
         if self._w3 is None:
-            w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 5}))
+            w3 = Web3(Web3.HTTPProvider(settings.active_rpc_url, request_kwargs={"timeout": 5}))
             w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             self._w3 = w3
         return self._w3
@@ -515,11 +515,18 @@ class BlockchainIndexer:
         tx       = log["transactionHash"].hex()
         event_id = self._event_id(log)
 
+        def _decode_task_id(raw) -> str:
+            # indexed string in Solidity → keccak256 hash (bytes32), not recoverable
+            if isinstance(raw, (bytes, bytearray)):
+                return "0x" + raw.hex()
+            return str(raw)
+
         if event_name == "PaymentDeposited":
-            logger.info("Indexer → PaymentDeposited: task=%s", args["taskId"])
+            task_id = _decode_task_id(args["taskId"])
+            logger.info("Indexer → PaymentDeposited: task=%s", task_id)
             insert_escrow_event(
                 event_id=event_id,
-                task_id=args["taskId"],
+                task_id=task_id,
                 event_type="deposited",
                 client=args["client"],
                 amount_wei=str(args["amount"]),
@@ -528,11 +535,12 @@ class BlockchainIndexer:
             )
 
         elif event_name == "FundsReleased":
+            task_id = _decode_task_id(args["taskId"])
             logger.info("Indexer → FundsReleased: task=%s provider=%s",
-                        args["taskId"], args["provider"][:10])
+                        task_id, args["provider"][:10])
             insert_escrow_event(
                 event_id=event_id,
-                task_id=args["taskId"],
+                task_id=task_id,
                 event_type="released",
                 provider=args["provider"],
                 amount_wei=str(args["providerAmount"]),
@@ -541,10 +549,11 @@ class BlockchainIndexer:
             )
 
         elif event_name == "ClientRefunded":
-            logger.info("Indexer → ClientRefunded: task=%s", args["taskId"])
+            task_id = _decode_task_id(args["taskId"])
+            logger.info("Indexer → ClientRefunded: task=%s", task_id)
             insert_escrow_event(
                 event_id=event_id,
-                task_id=args["taskId"],
+                task_id=task_id,
                 event_type="refunded",
                 client=args["client"],
                 amount_wei=str(args["amount"]),
@@ -553,13 +562,14 @@ class BlockchainIndexer:
             )
 
         elif event_name == "PipelinePaymentDeposited":
+            task_id = _decode_task_id(args["taskId"])
             logger.info(
                 "Indexer → PipelinePaymentDeposited: task=%s client=%s amount=%s participants=%d",
-                args["taskId"], args["client"][:10], args["amount"], args["participantCount"],
+                task_id, args["client"][:10], args["amount"], args["participantCount"],
             )
             insert_escrow_event(
                 event_id=event_id,
-                task_id=args["taskId"],
+                task_id=task_id,
                 event_type="pipeline_deposited",
                 client=args["client"],
                 amount_wei=str(args["amount"]),

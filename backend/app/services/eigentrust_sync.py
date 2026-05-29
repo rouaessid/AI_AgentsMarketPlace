@@ -113,7 +113,7 @@ def _sync_blocking() -> None:
     if not result.scores_by_agent:
         return
 
-    w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 10}))
+    w3 = Web3(Web3.HTTPProvider(settings.active_rpc_url, request_kwargs={"timeout": 10}))
     w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
     if not w3.is_connected():

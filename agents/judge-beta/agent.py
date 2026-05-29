@@ -150,42 +150,54 @@ def _summarise_trajectory(trajectory: list) -> str:
 
 
 def _call_groq(user_prompt: str, groq_key: str) -> dict:
+    import time
     if not groq_key:
         return {"judge_id": JUDGE_ID, "score": 0, "criteria": {},
                 "trajectory_check": {}, "challenge_token": "",
                 "justification": "Judge misconfigured: GROQ_API_KEY missing."}
-    try:
-        with httpx.Client(timeout=55) as client:
-            resp = client.post(
-                f"{LLM_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {groq_key}",
-                    "HTTP-Referer":  "http://localhost:8000",
-                    "X-Title":       "AgentMarket",
-                },
-                json={
-                    "model": LLM_MODEL,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user",   "content": user_prompt},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens":  1500,
-                },
-            )
-            if resp.status_code == 429:
-                logger.warning("429 rate limit hit — returning error (no retry in container)")
+
+    _neutral = {"judge_id": JUDGE_ID, "score": 50, "criteria": {},
+                "trajectory_check": {}, "challenge_token": "",
+                "justification": "Rate-limited after retries — abstaining with neutral score 50."}
+
+    for attempt in range(1, 4):
+        try:
+            with httpx.Client(timeout=55) as client:
+                resp = client.post(
+                    f"{LLM_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {groq_key}",
+                        "HTTP-Referer":  "http://localhost:8000",
+                        "X-Title":       "AgentMarket",
+                    },
+                    json={
+                        "model": LLM_MODEL,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user",   "content": user_prompt},
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens":  1500,
+                    },
+                )
+                if resp.status_code == 429:
+                    wait = 15 * attempt
+                    logger.warning("429 rate limit (attempt %d/3) — retrying in %ds", attempt, wait)
+                    if attempt < 3:
+                        time.sleep(wait)
+                        continue
+                    return _neutral
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+                return _parse(raw)
+        except Exception as e:
+            logger.error("Groq call failed (attempt %d): %s", attempt, e)
+            if attempt == 3:
                 return {"judge_id": JUDGE_ID, "score": 0, "criteria": {},
                         "trajectory_check": {}, "challenge_token": "",
-                        "justification": "Rate-limited (429). Try again in 1 minute."}
-            resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"].strip()
-            return _parse(raw)
-    except Exception as e:
-        logger.error("Groq call failed: %s", e)
-        return {"judge_id": JUDGE_ID, "score": 0, "criteria": {},
-                "trajectory_check": {}, "challenge_token": "",
-                "justification": f"Judge evaluation failed: {e}"}
+                        "justification": f"Judge evaluation failed: {e}"}
+            time.sleep(10 * attempt)
+    return _neutral
 
 
 def _parse(raw: str) -> dict:

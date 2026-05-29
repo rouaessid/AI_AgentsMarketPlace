@@ -124,7 +124,7 @@ class BlockchainService:
     def w3(self) -> Web3:
         if self._w3 is None:
             from web3.middleware import ExtraDataToPOAMiddleware
-            w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 10}))
+            w3 = Web3(Web3.HTTPProvider(settings.active_rpc_url, request_kwargs={"timeout": 10}))
             w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
             self._w3 = w3
         return self._w3

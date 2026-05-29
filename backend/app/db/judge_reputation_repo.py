@@ -32,20 +32,29 @@ def _compute_from_events(judge_id: str) -> dict:
             .first()
         )
 
+        from app.db.database import get_connection
+        conn = get_connection()
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM judge_verdicts WHERE judge_id = ?", (judge_id,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
         if not row:
             return {
                 "judge_id":          judge_id,
-                "total_validations": 0,
+                "total_validations": total,
                 "agreement_count":   0,
                 "agreement_rate":    0.5,
             }
 
-        agreement_rate = row.value / 100.0  # value = rate × 100
+        agreement_rate = row.value / 100.0
 
         return {
             "judge_id":          judge_id,
-            "total_validations": 0,   # non stocké on-chain
-            "agreement_count":   0,   # non stocké on-chain
+            "total_validations": total,
+            "agreement_count":   0,
             "agreement_rate":    agreement_rate,
         }
 

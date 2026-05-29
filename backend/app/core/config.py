@@ -17,7 +17,12 @@ class Settings(BaseSettings):
 
     storage_path:    str = "/tmp/agentmarket"
     max_zip_size_mb: int = 500
-    database_url:    str = ""
+    database_url:     str = ""
+    database_url_dev: str = ""
+
+    @property
+    def active_database_url(self) -> str:
+        return self.database_url_dev or self.database_url
 
     use_ipfs:       bool = False
     pinata_api_key: str  = ""
@@ -25,6 +30,11 @@ class Settings(BaseSettings):
     ipfs_gateway:   str  = "https://gateway.pinata.cloud/ipfs"
 
     rpc_url:                   str = "http://127.0.0.1:8545"
+    rpc_url_dev:               str = ""
+
+    @property
+    def active_rpc_url(self) -> str:
+        return self.rpc_url_dev or self.rpc_url
     chain_id:                  int = 31337
     identity_registry_address: str = ""
     platform_private_key:      str = ""
@@ -41,7 +51,12 @@ class Settings(BaseSettings):
 
     # Judge keys — dict wallet_address → private_key (source primaire)
     # Ex: JUDGE_WALLET_KEYS={"0x90F79...":"0x7c852...","0xAutre...":"0xClé..."}
-    judge_wallet_keys: dict[str, str] = {}
+    judge_wallet_keys:     dict[str, str] = {}
+    judge_wallet_keys_dev: dict[str, str] = {}
+
+    @property
+    def active_judge_wallet_keys(self) -> dict[str, str]:
+        return self.judge_wallet_keys_dev or self.judge_wallet_keys
 
     # Backwards-compat — dérivés automatiquement si judge_wallet_keys est vide
     judge_1_private_key: str = ""
@@ -70,10 +85,16 @@ class Settings(BaseSettings):
     gemini_api_key:        str = ""
     judge_delta_gemini_key: str = ""
 
+    # Mistral API keys — gamma + delta
+    judge_gamma_mistral_key: str = ""
+    judge_delta_mistral_key: str = ""
+
     # OpenRouter API keys — beta + gamma + epsilon
-    judge_beta_or_key:     str = ""
-    judge_gamma_or_key:    str = ""
-    judge_epsilon_or_key:  str = ""
+    judge_beta_or_key:       str = ""
+    judge_gamma_or_key:      str = ""
+    judge_epsilon_or_key:    str = ""
+    judge_beta_cerebras_key: str = ""
+    judge_epsilon_cerebras_key: str = ""
 
     sandbox_backend:  str = "docker"
     sandbox_network:  str = "none"

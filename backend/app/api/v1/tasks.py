@@ -160,9 +160,9 @@ def _onchain_prices_wei(agent_ids: list[str]) -> list[int] | None:
         from web3 import Web3
         from app.core.config import get_settings as _gs
         s = _gs()
-        if not s.identity_registry_address or not s.rpc_url:
+        if not s.identity_registry_address or not s.active_rpc_url:
             return None
-        w3 = Web3(Web3.HTTPProvider(s.rpc_url, request_kwargs={"timeout": 5}))
+        w3 = Web3(Web3.HTTPProvider(s.active_rpc_url, request_kwargs={"timeout": 5}))
         if not w3.is_connected():
             return None
         _abi = [
@@ -674,8 +674,11 @@ async def confirm_pack_access(task_id: str, body: ConfirmAccessRequest) -> JSONR
         raise HTTPException(403, detail="Wallet mismatch")
 
     # Verify pipeline payment exists on-chain before granting access
+    # taskId is indexed in Solidity → stored as keccak256 hash, not original string
     from app.db.escrow_repo import get_escrow_events_for_task
-    onchain = get_escrow_events_for_task(task_id)
+    from web3 import Web3
+    task_id_hash = "0x" + Web3.keccak(text=task_id).hex()
+    onchain = get_escrow_events_for_task(task_id_hash)
     if not any(e["event_type"] == "pipeline_deposited" for e in onchain):
         raise HTTPException(402, detail="Paiement pipeline non trouvé on-chain — attendez la confirmation du bloc")
 

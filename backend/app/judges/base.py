@@ -67,13 +67,23 @@ async def load_trace(proxy_cid: str, storage_path: str) -> TraceData:
 
 
 async def _fetch_raw(cid: str, storage_path: str) -> dict:
-    # Local (QmLOCAL… or any CID with a local file present)
+    from app.core.config import get_settings
+    settings = get_settings()
+
+    if settings.use_ipfs:
+        # Pinata real — fetch directly from gateway
+        url = f"{settings.ipfs_gateway}/{cid}"
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.json()
+
+    # Local storage
     local = Path(storage_path) / "ipfs_local" / f"{cid}.json"
     if local.exists():
         return json.loads(local.read_text(encoding="utf-8"))
 
-    # Also check proxy_traces folder (saved by ProxyService._save)
-    # cid here might actually be a run_id path in edge cases
+    # Check proxy_traces folder
     traces_dir = Path(storage_path) / "proxy_traces"
     for candidate in traces_dir.glob("*.json"):
         try:
@@ -83,14 +93,7 @@ async def _fetch_raw(cid: str, storage_path: str) -> dict:
         except Exception:
             continue
 
-    # Real IPFS via gateway
-    from app.core.config import get_settings
-    settings = get_settings()
-    url = f"{settings.ipfs_gateway}/{cid}"
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.json()
+    raise RuntimeError(f"CID {cid} not found locally")
 
 
 def _parse(raw: dict) -> TraceData:

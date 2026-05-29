@@ -285,7 +285,12 @@ def compute_eigentrust(
         if task_p_overrides and aid in task_p_overrides:
             success_rates[i] = max(0.0, float(task_p_overrides[aid]))
 
-    # ── Normaliser p ──────────────────────────────────────────────────────────
+    # ── Scores absolus pour l'affichage (÷ 100, pas ÷ p_sum) ────────────────
+    # p_abs[i] ∈ [0, 1] : qualité réelle de l'agent (ex: 26.6 → 0.266 → 26.6%)
+    # Évite le 100% trompeur quand un seul agent a des scores dans le réseau.
+    p_abs = success_rates / 100.0
+
+    # ── Normalisation relative pour le Power Method (vecteur de probabilité) ──
     p_sum = success_rates.sum()
     p = success_rates / p_sum if p_sum > 0 else np.ones(N) / N
 
@@ -311,22 +316,25 @@ def compute_eigentrust(
         N, iters, converged, alpha,
     )
 
-    # ── Score Final V[i] = t[i] × f[i] ───────────────────────────────────────
-    final = t * uf
-    fs = final.sum()
-    if fs > 0:
-        final /= fs
+    # ── Global trust absolu : t[i] × qualité_totale_réseau ───────────────────
+    # t est normalisé (somme=1) — on le ramène à l'échelle absolue [0, 1].
+    # Quand un seul agent a des scores : t=[1,0,0] × 0.266 → [0.266, 0, 0]
+    p_abs_sum = float(p_abs.sum())
+    t_abs = t * p_abs_sum
 
-    global_trust_list = t.tolist()
-    final_scores_list = final.tolist()
+    # ── Score Final absolu : t_abs[i] × uf[i] (sans renormalisation) ─────────
+    final_abs = t_abs * uf
+
     uf_list           = uf.tolist()
+    t_abs_list        = t_abs.tolist()
+    final_abs_list    = final_abs.tolist()
 
     scores_by_agent = {
         agent_ids[i]: {
-            "pre_trust":    round(float(p[i]),                 6),
-            "global_trust": round(float(global_trust_list[i]), 6),
-            "user_feedback": round(float(uf_list[i]),          4),
-            "final_score":  round(float(final_scores_list[i]), 6),
+            "pre_trust":     round(float(p_abs[i]),       6),
+            "global_trust":  round(float(t_abs_list[i]),  6),
+            "user_feedback": round(float(uf_list[i]),     4),
+            "final_score":   round(float(final_abs_list[i]), 6),
         }
         for i in range(N)
     }
@@ -334,9 +342,9 @@ def compute_eigentrust(
     return EigenTrustResult(
         agent_ids=agent_ids,
         token_ids=token_ids,
-        pre_trust=p.tolist(),
-        global_trust=global_trust_list,
-        final_scores=final_scores_list,
+        pre_trust=p_abs.tolist(),
+        global_trust=t_abs_list,
+        final_scores=final_abs_list,
         user_feedback=uf_list,
         iterations=iters,
         converged=converged,

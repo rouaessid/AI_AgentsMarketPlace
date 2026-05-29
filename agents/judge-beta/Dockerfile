@@ -27,8 +27,8 @@ COPY agent.py .
 
 ENV AGENT_ID=judge-beta
 ENV AGENT_NAME="Judge Beta"
-ENV LLM_MODEL=deepseek/deepseek-v4-flash:free
-ENV LLM_BASE_URL=https://openrouter.ai/api/v1
+ENV LLM_MODEL=llama-3.3-70b-versatile
+ENV LLM_BASE_URL=https://api.groq.com/openai/v1
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 

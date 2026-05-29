@@ -397,6 +397,18 @@ async def run_agent_public(
             logger.warning("Résolution digest: %s", e)
     # ── FIN ───────────────────────────────────────────────────────────────
 
+    # Fallback: fill empty buyer keys with platform keys (dev convenience)
+    from app.core.config import get_settings as _gs
+    _s = _gs()
+    _platform_fallbacks = {
+        "GROQ_API_KEY":   _s.groq_api_key,
+        "TAVILY_API_KEY": _s.writer_tavily_key or _s.tavily_api_key,
+    }
+    effective_params = {
+        k: (v if v else _platform_fallbacks.get(k, v))
+        for k, v in body.params.items()
+    }
+
     try:
         manifest = await sandbox_svc.run_agent(
             record,
@@ -404,9 +416,9 @@ async def run_agent_public(
                 task_id=str(uuid.uuid4())[:8],
                 agent_id=agent_id,
                 task_prompt=body.prompt,
-                task_params=body.params,
+                task_params=effective_params,
             ),
-            env_vars=body.params,
+            env_vars=effective_params,
         )
     except Exception as e:
         logger.exception("Erreur Run: %s", e)
@@ -492,7 +504,7 @@ async def get_purchase_info(agent_id: str) -> PurchaseInfoResponse:
     escrow_address = _settings.escrow_manager_address or ""
     call_data = "0x"
 
-    w3 = Web3(Web3.HTTPProvider(_settings.rpc_url))
+    w3 = Web3(Web3.HTTPProvider(_settings.active_rpc_url))
 
     # Read the real price from IdentityRegistry (set at registration time).
     # This is the authoritative value that EscrowManager will enforce on-chain.
@@ -556,8 +568,11 @@ async def purchase_agent(
         )
 
     # Verify payment exists on-chain before granting access
+    # indexed string in Solidity events is stored as keccak256 hash
     from app.db.escrow_repo import get_escrow_events_for_task
-    onchain = get_escrow_events_for_task(body.task_id)
+    from eth_utils import keccak
+    task_id_hash = "0x" + keccak(text=body.task_id).hex()
+    onchain = get_escrow_events_for_task(task_id_hash)
     if not any(e["event_type"] == "deposited" for e in onchain):
         raise HTTPException(402, detail="Paiement non trouvé on-chain — attendez la confirmation du bloc")
 
@@ -728,7 +743,7 @@ async def get_feedback_info(
 
     if reputation_address:
         try:
-            w3 = Web3(Web3.HTTPProvider(_settings.rpc_url))
+            w3 = Web3(Web3.HTTPProvider(_settings.active_rpc_url))
             rep = w3.eth.contract(
                 address=Web3.to_checksum_address(reputation_address),
                 abi=_REPUTATION_GIVE_FEEDBACK_ABI,

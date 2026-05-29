@@ -175,6 +175,15 @@ export default function AgentDetail() {
     try {
       if (!window.ethereum) throw new Error('MetaMask not detected')
 
+      // Ensure Hardhat Local network (chainId 31337)
+      try {
+        await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x7A69' }] })
+      } catch (sw) {
+        if (sw.code === 4902) {
+          await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x7A69', chainName: 'Hardhat Local', rpcUrls: ['http://127.0.0.1:8545'], nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 } }] })
+        }
+      }
+
       const priceWei = BigInt(purchaseInfo.required_wei)
 
       // Send MetaMask tx to EscrowManager.depositPayment()
@@ -359,11 +368,6 @@ export default function AgentDetail() {
           ))}
         </div>
 
-        {/* ── Validation banner (visible after purchase) ────────────────── */}
-        {hasAccess && valStatus && (
-          <ValidationBanner valStatus={valStatus} />
-        )}
-
         {/* ── Tabs ──────────────────────────────────────────────────────── */}
         <div className="flex gap-1 p-1 rounded-xl bg-am-surface border border-am-border mb-6">
           {visibleTabs.map(({ id, label, icon: Icon }) => (
@@ -401,7 +405,7 @@ export default function AgentDetail() {
             {tab === 'overview'  && <OverviewTab agent={agent} monthlyData={monthlyData} weeklyData={weeklyData} accent={accent} hasMonthlyMetrics={hasMonthlyMetrics} hasWeeklyMetrics={hasWeeklyMetrics} agentId={agentId} reputation={reputation} onReputationRefresh={fetchReputation} valStatus={valStatus} />}
             {tab === 'readme'    && <ReadmeTab agent={agent} />}
             {tab === 'integrate' && hasAccess && <IntegrateTab agent={agent} />}
-            {tab === 'test'      && hasAccess && <TestTab agent={agent} buyerWallet={walletAddress} onValidationStarted={fetchValidation} onRunComplete={fetchAgent} result={runResult} error={runError} onResult={setRunResult} onError={setRunError} />}
+            {tab === 'test'      && hasAccess && <TestTab agent={agent} buyerWallet={walletAddress} onValidationStarted={fetchValidation} onRunComplete={fetchAgent} result={runResult} error={runError} onResult={setRunResult} onError={setRunError} agentId={agentId} accent={accent} valStatus={valStatus} onReputationRefresh={fetchReputation} />}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -633,7 +637,6 @@ function OverviewTab({ agent, monthlyData, weeklyData, accent, hasMonthlyMetrics
         </div>
       </div>
       <ReputationSection reputation={reputation} accent={accent} />
-      <RatingForm agentId={agentId} onSubmit={onReputationRefresh} accent={accent} validated={valStatus?.status === 'validated' || valStatus?.status === 'rejected'} />
     </div>
   )
 }
@@ -691,7 +694,7 @@ function ReputationSection({ reputation, accent }) {
 
 // ── RatingForm ────────────────────────────────────────────────────────────────
 
-function RatingForm({ agentId, onSubmit, accent, validated }) {
+function RatingForm({ agentId, onSubmit, accent, validated, title }) {
   const [stars,   setStars]   = useState(0)
   const [hover,   setHover]   = useState(0)
   const [comment, setComment] = useState('')
@@ -714,7 +717,7 @@ function RatingForm({ agentId, onSubmit, accent, validated }) {
   return (
     <div className="card shadow-card-md p-5">
       <h3 className="text-sm font-semibold text-am-text mb-4 flex items-center gap-2">
-        <Star size={14} style={{ color: accent }} /> Noter cet agent
+        <Star size={14} style={{ color: accent }} /> {title || 'Noter cet agent'}
       </h3>
 
       {result && (
@@ -902,11 +905,12 @@ function IntegrateTab({ agent }) {
   )
 }
 
-function TestTab({ agent, buyerWallet, onValidationStarted, onRunComplete, result, error, onResult, onError }) {
-  const [prompt,   setPrompt]  = useState('')
-  const [params,   setParams]  = useState(Object.fromEntries((agent.env_var_keys || []).map((k) => [k, ''])))
-  const [running,  setRunning] = useState(false)
-  const [elapsed,  setElapsed] = useState(0)
+function TestTab({ agent, buyerWallet, onValidationStarted, onRunComplete, result, error, onResult, onError, agentId, accent, valStatus, onReputationRefresh }) {
+  const [prompt,              setPrompt]              = useState('')
+  const [params,              setParams]              = useState(Object.fromEntries((agent.env_var_keys || []).map((k) => [k, ''])))
+  const [running,             setRunning]             = useState(false)
+  const [elapsed,             setElapsed]             = useState(0)
+  const [validationTriggered, setValidationTriggered] = useState(false)
   const timerRef = useRef(null)
 
   useEffect(() => {
@@ -932,6 +936,7 @@ function TestTab({ agent, buyerWallet, onValidationStarted, onRunComplete, resul
       onResult(data)
       if (onRunComplete) onRunComplete()
       if (data.validation_started && onValidationStarted) {
+        setValidationTriggered(true)
         setTimeout(onValidationStarted, 2000)
       }
     } catch (e) {
@@ -1035,6 +1040,18 @@ function TestTab({ agent, buyerWallet, onValidationStarted, onRunComplete, resul
               {result.proxy_metrics.total_tokens > 0 && <span>Tokens: <b className="text-am-text">{result.proxy_metrics.total_tokens}</b></span>}
             </div>
           )}
+        </motion.div>
+      )}
+
+      {result && valStatus && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+          <ValidationBanner valStatus={valStatus} />
+        </motion.div>
+      )}
+
+      {result && valStatus && (valStatus.status === 'validated' || valStatus.status === 'rejected') && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+          <RatingForm agentId={agentId} onSubmit={onReputationRefresh} accent={accent} validated={true} title="Voulez-vous laisser votre feedback ?" />
         </motion.div>
       )}
     </div>

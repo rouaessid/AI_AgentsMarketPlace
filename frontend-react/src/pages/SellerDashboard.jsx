@@ -51,7 +51,8 @@ export default function SellerDashboard() {
     return n.toFixed(2)
   }
 
-  const totalEarnings = agents.reduce((s, a) => s + (parseFloat(a.earnings_eth) || 0), 0)
+  const judgeEarnings = (a) => a.agent_type === 'judge' ? (a.metrics?.tasks_performed || 0) * 0.0001 : 0
+  const totalEarnings = agents.reduce((s, a) => s + (parseFloat(a.earnings_eth) || 0) + judgeEarnings(a), 0)
   const totalTasks    = agents.reduce((s, a) => s + (a.metrics?.tasks_performed || 0), 0)
   const avgReputation = agents.length
     ? Math.round(agents.reduce((s, a) => s + (a.metrics?.reputation_score || 0), 0) / agents.length)
@@ -488,7 +489,7 @@ function AgentRow({ agent, index }) {
               { icon: CheckCircle, val: `${m.success_rate ?? 0}%`,              label: 'success',  color: '#10b981' },
               { icon: Activity,    val: (m.tasks_performed ?? 0).toLocaleString(), label: 'tasks',  color: accent   },
               { icon: Zap,         val: `${m.avg_response_time ?? 0}s`,          label: 'avg resp', color: '#8b5cf6' },
-              { icon: Wallet,      val: `${agent.earnings_eth || '0'} ETH`,      label: 'earned',   color: '#f59e0b' },
+              { icon: Wallet,      val: `${isJudge ? ((m.tasks_performed || 0) * 0.0001).toFixed(4) : (agent.earnings_eth || '0')} ETH`, label: 'earned', color: '#f59e0b' },
             ].map(({ icon: Icon, val, label, color }) => (
               <div key={label} className="flex items-center gap-1.5 text-xs">
                 <Icon size={11} style={{ color }} />
