@@ -1,0 +1,155 @@
+@startuml
+title Enregistrement d'un Agent
+
+skinparam sequenceMessageAlign left
+skinparam backgroundColor white
+
+actor       "Vendeur"          as Seller
+participant "Frontend"         as Client
+participant "MetaMask"         as MM   #Orange
+participant "Backend"          as API
+database    "PostgreSQL"       as DB
+participant "IPFS"             as IPFS
+participant "IdentityRegistry"   as IR   #LightBlue
+participant "StakingContract"    as SC   #LightBlue
+participant "ValidationRegistry" as VR   #LightBlue
+participant "Container du juge"  as JC   #LightYellow
+
+== Soumission ==
+
+Seller  ->   Client : soumettreFormulaire(agentData)
+activate Client
+
+Client  ->   API    : enregistrerAgent(agentData)
+activate API
+
+API     ->   IPFS   : uploadMetadonnees(agentData)
+activate IPFS
+IPFS   -->   API    : adresseIPFS(agentURI)
+deactivate IPFS
+
+API     ->   DB     : creerAgent(agentId, statut=enAttenteDeSignature)
+activate DB
+DB     -->   API    : ok
+deactivate DB
+
+API    -->   Client : transactionASignerMetaMask(registrationId, agentURI)
+deactivate API
+deactivate Client
+
+== Identite sur la blockchain ==
+
+Seller  ->   Client : confirmerSignatureIdentite()
+activate Client
+
+Client  ->   MM     : signerEtEnvoyer(transactionIdentite)
+activate MM
+
+MM     ->>   Seller : demanderApprobation()
+Seller -->   MM     : approuve
+
+MM      ->   IR     : register(agentId, agentType, agentURI, pricePerTask)
+activate IR
+IR     ->   IR     : emit AgentCreated(agentId, tokenId, owner)
+IR     -->   MM     : txHash
+deactivate IR
+
+MM     -->   Client : transactionConfirmee(txHash, tokenId)
+
+note over IR : The Graph lit les logs\nde la blockchain (async)\net indexe AgentCreated
+deactivate MM
+deactivate Client
+
+== Mise en jeu ==
+
+Seller  ->   Client : confirmerSignatureStake()
+activate Client
+
+Client  ->   MM     : signerEtEnvoyer(transactionStake)
+activate MM
+
+MM     ->>   Seller : demanderApprobation()
+Seller -->   MM     : approuve
+
+MM      ->   SC     : stake()
+activate SC
+SC     ->   SC     : emit Staked(wallet, montant)
+SC     -->   MM     : txHash
+deactivate SC
+
+MM     -->   Client : transactionStakeConfirmee
+
+note over SC : The Graph lit les logs\nde la blockchain (async)\net indexe Staked
+deactivate MM
+
+Client  ->   API    : confirmer(registrationId, txHash, tokenId)
+activate API
+
+== Activation ==
+
+alt Agent de type PROVIDER
+    API  ->  DB  : mettreAJourStatut(actif)
+    activate DB
+    DB   -->  API : ok
+    deactivate DB
+    API  ->>  API : calculerEmbedding(agentId) [fond]
+    activate API
+    deactivate API
+    API  -->  Client : agentActif
+    deactivate API
+    Client  ->  Seller : afficherSellerDashboard(badge=actif)
+
+else Agent de type JUGE
+    API  ->  DB  : mettreAJourStatut(enAttenteTestTechnique)
+    activate DB
+    DB   -->  API : ok
+    deactivate DB
+    API  -->  Client : enAttenteDuTestTechnique
+    deactivate API
+    Client  ->  Seller : afficherSellerDashboard(badge=enAttenteValidation)
+
+    API  ->>  JC  : lancerContainer(tacheDeTest)
+    activate JC
+
+    JC   ->   API : demanderTache(judgeId)
+    activate API
+    API  -->  JC  : fournirTrace(executionTrace)
+    deactivate API
+
+    JC   ->   API : soumettreResultat(judgeId, score, resultCID)
+    activate API
+
+    alt Test reussi
+        API  ->  VR  : enregistrerResultat(judgeId, pass=true, resultCID)
+        activate VR
+        VR   -->  API : HoneypotPassed(judgeId, resultCID)
+        deactivate VR
+        API  ->  DB  : mettreAJourStatut(actif)
+        activate DB
+        DB   -->  API : ok
+        deactivate DB
+        API  ->>  API : calculerEmbedding(judgeId) [fond]
+        activate API
+        deactivate API
+        Client  ->  Seller : mettreAJourBadge(actif)
+
+    else Test echoue
+        API  ->  VR  : enregistrerResultat(judgeId, pass=false, resultCID)
+        activate VR
+        VR   -->  API : HoneypotFailed(judgeId, resultCID)
+        deactivate VR
+        API  ->  DB  : mettreAJourStatut(validationEchouee)
+        activate DB
+        DB   -->  API : ok
+        deactivate DB
+        Client  ->  Seller : mettreAJourBadge(validationEchouee)
+    end
+
+    API  -->  JC  : ack
+    deactivate API
+    deactivate JC
+end
+
+deactivate Client
+
+@enduml

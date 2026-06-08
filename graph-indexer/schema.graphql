@@ -92,6 +92,29 @@ type ValidationResponseEvent @entity(immutable: true) {
   transactionHash: Bytes!
 }
 
+# ── Honeypot ─────────────────────────────────────────────────────────────────
+
+type JudgeHoneypotStats @entity(immutable: false) {
+  id: String!           # judgeId
+  authorized: Boolean!  # true si dernier test passé
+  totalPasses: BigInt!
+  totalFails: BigInt!
+  lastResultCID: String!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type HoneypotResultEvent @entity(immutable: true) {
+  id: Bytes!
+  judgeId: String!
+  passed: Boolean!
+  resultCID: String!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
 # ── Staking ──────────────────────────────────────────────────────────────────
 
 type StakeEvent @entity(immutable: true) {

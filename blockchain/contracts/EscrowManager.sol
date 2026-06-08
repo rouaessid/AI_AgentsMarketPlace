@@ -5,41 +5,52 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 // ════════════════════════════════════════════════════════════════════════════
-//  EscrowManager
+//  EscrowManager — AgentMarket
+//  Gère le blocage et la distribution ETH des paiements de tâches.
+//  Prix lu depuis IdentityRegistry. Juges payés via judgeFeePercentage.
+//  Solo et pipeline supportés.
 // ════════════════════════════════════════════════════════════════════════════
-// Gère le blocage et la distribution en ETH natif du paiement des tâches.
-// Les juges se partagent un pourcentage fixe (judgeFeePercentage).
-// Le reste va au provider en cas de succès, ou le client est remboursé.
-// Le prix par tâche est lu depuis IdentityRegistry — un sous-paiement est rejeté.
+
+// ── Interface ────────────────────────────────────────────────────────────────
 
 interface IIdentityRegistry {
     function getPricePerTask(string calldata agentId_) external view returns (uint256);
     function isActive(string calldata agentId_) external view returns (bool);
 }
 
-// ── Errors supplémentaires pipeline ──────────────────────────────────────────
-// (déclarés avant le contrat pour être dans le namespace global)
+// ════════════════════════════════════════════════════════════════════════════
 
 contract EscrowManager is Ownable, ReentrancyGuard {
+
+    // ── State Variables ───────────────────────────────────────────────────────
+
     address public validationRegistry;
-    address public identityRegistry;   // read price on-chain
-    uint256 public judgeFeePercentage; // ex: 10 pour 10%
+    address public identityRegistry;
+    uint256 public judgeFeePercentage;
 
-    // taskId => montant bloqué en ETH
+    // taskId → montant bloqué en ETH
     mapping(string => uint256) public taskFunds;
-    // taskId => adresse du client ayant payé
+    // taskId → adresse du client ayant payé
     mapping(string => address) public taskClients;
-    // taskId => agentId (to identify provider for release)
+    // taskId → agentId concerné
     mapping(string => string)  public taskAgent;
+    // taskId → true si tâche pipeline
+    mapping(string => bool)    public isPipelineTask;
 
-    // ── Storage pipeline ─────────────────────────────────────────────────────
-    // Participants et leurs parts (en bps) stockés à depositPaymentPipeline.
-    // refundClient() fonctionne sans changement : il lit taskFunds + taskClients.
+    // Participants et parts pipeline (internes — gérés par ce contrat)
     mapping(string => address[]) private _pipelineWallets;
-    mapping(string => uint256[]) private _pipelineShares;  // bps, somme = 10000
-    mapping(string => bool)      public  isPipelineTask;
+    mapping(string => uint256[]) private _pipelineShares; // bps, somme = 10000
 
-    // ── Errors ───────────────────────────────────────────────────────────────
+    // ── Events ────────────────────────────────────────────────────────────────
+
+    event PaymentDeposited(string indexed taskId, address indexed client, uint256 amount);
+    event FundsReleased(string indexed taskId, address indexed provider, uint256 providerAmount, uint256 totalJudgeAmount);
+    event ClientRefunded(string indexed taskId, address indexed client, uint256 amount);
+    event PipelinePaymentDeposited(string indexed taskId, address indexed client, uint256 amount, uint256 participantCount);
+    event PipelineFundsReleased(string indexed taskId, uint256 totalAmount, uint256 participantCount);
+
+    // ── Errors ────────────────────────────────────────────────────────────────
+
     error Unauthorized();
     error InvalidFeePercentage();
     error NoFundsLocked(string taskId);
@@ -50,17 +61,21 @@ contract EscrowManager is Ownable, ReentrancyGuard {
     error InvalidSharesLength();
     error InvalidSharesSum(uint256 got, uint256 expected);
 
-    // ── Events ───────────────────────────────────────────────────────────────
-    event PaymentDeposited(string indexed taskId, address indexed client, uint256 amount);
-    event FundsReleased(string indexed taskId, address indexed provider, uint256 providerAmount, uint256 totalJudgeAmount);
-    event ClientRefunded(string indexed taskId, address indexed client, uint256 amount);
-    event PipelinePaymentDeposited(string indexed taskId, address indexed client, uint256 amount, uint256 participantCount);
-    event PipelineFundsReleased(string indexed taskId, uint256 totalAmount, uint256 participantCount);
+    // ── Modifiers ─────────────────────────────────────────────────────────────
+
+    modifier onlyValidationRegistry() {
+        if (msg.sender != validationRegistry) revert Unauthorized();
+        _;
+    }
+
+    // ── Constructor ───────────────────────────────────────────────────────────
 
     constructor(uint256 _judgeFeePercentage) Ownable(msg.sender) {
         if (_judgeFeePercentage > 100) revert InvalidFeePercentage();
         judgeFeePercentage = _judgeFeePercentage;
     }
+
+    // ── Admin ─────────────────────────────────────────────────────────────────
 
     function setValidationRegistry(address _registry) external onlyOwner {
         if (_registry == address(0)) revert ZeroAddress();
@@ -77,24 +92,17 @@ contract EscrowManager is Ownable, ReentrancyGuard {
         judgeFeePercentage = _percentage;
     }
 
-    modifier onlyValidationRegistry() {
-        if (msg.sender != validationRegistry) revert Unauthorized();
-        _;
-    }
+    // ── External — Solo ───────────────────────────────────────────────────────
 
     /**
-     * @notice Le client dépose l'ETH pour une tâche.
+     * @notice Dépôt ETH pour une tâche solo.
      * @param taskId_  Identifiant unique de la tâche
-     * @param agentId_ Agent à appeler — le prix est vérifié on-chain via IdentityRegistry
-     *
-     * Le montant exact requis = IdentityRegistry.getPricePerTask(agentId_).
-     * Un sous-paiement est rejeté avec InsufficientPayment.
+     * @param agentId_ Agent cible — prix vérifié via IdentityRegistry
      */
     function depositPayment(
         string calldata taskId_,
         string calldata agentId_
     ) external payable nonReentrant {
-        // Verify price if IdentityRegistry is set
         if (identityRegistry != address(0)) {
             IIdentityRegistry ir = IIdentityRegistry(identityRegistry);
             if (!ir.isActive(agentId_)) revert AgentNotActive(agentId_);
@@ -113,95 +121,80 @@ contract EscrowManager is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Appelé par ValidationRegistry.sol si le verdict est VALID.
-     *         Libère les fonds et partage entre provider et juges.
+     * @notice Libère les fonds vers provider et juges (verdict VALID).
+     * @dev Appelé uniquement par ValidationRegistry.
      */
     function releaseFunds(
-        string calldata taskId_, 
-        address provider_, 
+        string calldata   taskId_,
+        address           provider_,
         address[] calldata consensusJudges_
     ) external nonReentrant onlyValidationRegistry {
         uint256 totalAmount = taskFunds[taskId_];
         if (totalAmount == 0) revert NoFundsLocked(taskId_);
 
-        // Sécurité Reentrancy : mettre le solde à zéro avant les transferts
         taskFunds[taskId_] = 0;
 
         uint256 judgeTotalAmount = (totalAmount * judgeFeePercentage) / 100;
-        uint256 providerAmount = totalAmount - judgeTotalAmount;
+        uint256 providerAmount   = totalAmount - judgeTotalAmount;
 
-        // 1. Distribuer aux bons juges
         if (consensusJudges_.length > 0 && judgeTotalAmount > 0) {
             uint256 amountPerJudge = judgeTotalAmount / consensusJudges_.length;
             for (uint256 i = 0; i < consensusJudges_.length; i++) {
-                (bool success, ) = consensusJudges_[i].call{value: amountPerJudge}("");
-                if (!success) revert TransferFailed();
+                (bool ok, ) = consensusJudges_[i].call{value: amountPerJudge}("");
+                if (!ok) revert TransferFailed();
             }
         } else {
-            // S'il n'y a pas de juges (anormal, mais cas limite) : tout va au provider
-            providerAmount = totalAmount;
+            providerAmount   = totalAmount;
             judgeTotalAmount = 0;
         }
 
-        // 2. Distribuer au provider
         if (providerAmount > 0) {
-            (bool success, ) = provider_.call{value: providerAmount}("");
-            if (!success) revert TransferFailed();
+            (bool ok, ) = provider_.call{value: providerAmount}("");
+            if (!ok) revert TransferFailed();
         }
 
         emit FundsReleased(taskId_, provider_, providerAmount, judgeTotalAmount);
     }
 
     /**
-     * @notice Appelé par ValidationRegistry.sol si le verdict est INVALID ou la tâche expire.
-     *         Rembourse le client. Fonctionne pour solo ET pipeline (même stockage).
+     * @notice Rembourse le client (verdict INVALID ou tâche expirée).
+     * @dev Fonctionne pour solo et pipeline (même stockage taskFunds/taskClients).
      */
     function refundClient(string calldata taskId_) external nonReentrant onlyValidationRegistry {
         uint256 amount = taskFunds[taskId_];
         if (amount == 0) revert NoFundsLocked(taskId_);
 
         address client = taskClients[taskId_];
-
-        // Sécurité Reentrancy
         taskFunds[taskId_] = 0;
 
-        (bool success, ) = client.call{value: amount}("");
-        if (!success) revert TransferFailed();
+        (bool ok, ) = client.call{value: amount}("");
+        if (!ok) revert TransferFailed();
 
         emit ClientRefunded(taskId_, client, amount);
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    //  PIPELINE — fonctions additives (solo flow ci-dessus inchangé)
-    // ════════════════════════════════════════════════════════════════════════
+    // ── External — Pipeline ───────────────────────────────────────────────────
 
     /**
-     * @notice Dépôt escrow pour une tâche pipeline multi-agents.
-     *         Le montant requis = Σ getPricePerTask(agentIds_[i]).
-     *
-     * @param taskId_       ID unique de la tâche pipeline
-     * @param agentIds_     Tous les agents participants (lead en premier)
-     * @param wallets_      Adresses wallet de chaque agent (même ordre)
-     * @param shares_bps_   Part de chaque agent en basis points — somme = 10000
-     *                      (représente leur part des fonds hors frais juges)
-     *
-     * shares_bps_ exemple : [5000, 3000, 2000] = 50 / 30 / 20 %
+     * @notice Dépôt ETH pour une tâche pipeline multi-agents.
+     * @param taskId_      ID unique de la tâche
+     * @param agentIds_    Agents participants (lead en premier)
+     * @param wallets_     Wallets des agents (même ordre)
+     * @param shares_bps_  Part de chaque agent en basis points — somme = 10000
      */
     function depositPaymentPipeline(
-        string   calldata taskId_,
-        string[] calldata agentIds_,
+        string   calldata  taskId_,
+        string[] calldata  agentIds_,
         address[] calldata wallets_,
         uint256[] calldata shares_bps_
     ) external payable nonReentrant {
         if (wallets_.length != shares_bps_.length || wallets_.length == 0)
             revert InvalidSharesLength();
 
-        // Vérification somme shares = 10000 bps
         uint256 totalShares = 0;
         for (uint256 i = 0; i < shares_bps_.length; i++) totalShares += shares_bps_[i];
         if (totalShares != 10_000) revert InvalidSharesSum(totalShares, 10_000);
 
-        // Vérification prix total si IdentityRegistry disponible
         if (identityRegistry != address(0)) {
             IIdentityRegistry ir = IIdentityRegistry(identityRegistry);
             uint256 requiredTotal = 0;
@@ -215,13 +208,10 @@ contract EscrowManager is Ownable, ReentrancyGuard {
             if (msg.value == 0) revert NoFundsLocked(taskId_);
         }
 
-        // Stockage commun avec solo (refundClient fonctionnera sans modification)
-        taskFunds[taskId_]   += msg.value;
-        taskClients[taskId_]  = msg.sender;
-        taskAgent[taskId_]    = agentIds_[0];   // lead agent
-        isPipelineTask[taskId_] = true;
-
-        // Stockage spécifique pipeline
+        taskFunds[taskId_]      += msg.value;
+        taskClients[taskId_]     = msg.sender;
+        taskAgent[taskId_]       = agentIds_[0];
+        isPipelineTask[taskId_]  = true;
         _pipelineWallets[taskId_] = wallets_;
         _pipelineShares[taskId_]  = shares_bps_;
 
@@ -229,20 +219,12 @@ contract EscrowManager is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Libère les fonds d'une tâche pipeline après verdict VALID.
-     *         Appelé par ValidationRegistry (onlyValidationRegistry).
-     *
-     *         Distribution :
-     *           1. judgeFeePercentage % → partagé entre juges consensuels
-     *           2. (100 - judgeFeePercentage) % → partagé entre providers
-     *              selon leurs shares_bps_ définis au dépôt
-     *
-     * @param taskId_          ID de la tâche pipeline
-     * @param consensusJudges_ Adresses des juges ayant voté VALID
+     * @notice Libère les fonds d'une tâche pipeline (verdict VALID).
+     *         Distribution : judgeFeePercentage% aux juges, reste aux providers selon shares_bps_.
      */
     function releaseFundsPipeline(
-        string calldata  taskId_,
-        address[] calldata consensusJudges_
+        string    calldata  taskId_,
+        address[] calldata  consensusJudges_
     ) external nonReentrant onlyValidationRegistry {
         uint256 totalAmount = taskFunds[taskId_];
         if (totalAmount == 0) revert NoFundsLocked(taskId_);
@@ -251,10 +233,8 @@ contract EscrowManager is Ownable, ReentrancyGuard {
         uint256[] storage shares  = _pipelineShares[taskId_];
         if (wallets.length == 0) revert NoFundsLocked(taskId_);
 
-        // Reentrancy guard : mettre à zéro avant les transferts
         taskFunds[taskId_] = 0;
 
-        // 1. Frais juges
         uint256 judgeFees    = (totalAmount * judgeFeePercentage) / 100;
         uint256 providerPool = totalAmount - judgeFees;
 
@@ -265,11 +245,9 @@ contract EscrowManager is Ownable, ReentrancyGuard {
                 if (!ok) revert TransferFailed();
             }
         } else {
-            // Pas de juges éligibles → tout dans le pool providers
             providerPool = totalAmount;
         }
 
-        // 2. Distribution providers selon shares_bps
         for (uint256 i = 0; i < wallets.length; i++) {
             uint256 amount = (providerPool * shares[i]) / 10_000;
             if (amount > 0) {

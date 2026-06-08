@@ -367,9 +367,8 @@ export default function JudgeAgentDetail() {
   const [history,    setHistory]    = useState([])
   const [histTotal,  setHistTotal]  = useState(0)
   const [readme,     setReadme]     = useState('')
-  const [loading,    setLoading]    = useState(true)
-  const [error,      setError]      = useState('')
-
+  const [loading,         setLoading]         = useState(true)
+  const [error,           setError]           = useState('')
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
@@ -415,11 +414,12 @@ export default function JudgeAgentDetail() {
   }
 
   const m        = agent.metrics || {}
-  const repScore = stats ? stats.agreement_rate : (m.reputation_score ?? 50)
+  const hasValidations = (stats && stats.total_validations > 0) || (m.tasks_performed > 0)
+  const repScore = hasValidations ? stats.agreement_rate : 0
 
   const statCards = [
     { label: 'Total Validations', value: stats != null ? String(stats.total_validations) : '--', sub: 'All-time',             icon: Users,       color: ACCENT    },
-    { label: 'Agreement Rate',    value: stats != null ? `${stats.agreement_rate}%`       : '--', sub: 'With peer consensus',  icon: TrendingUp,  color: '#10b981' },
+    { label: 'Agreement Rate',    value: hasValidations ? `${stats.agreement_rate}%` : '—', sub: hasValidations ? 'With peer consensus' : 'No validations yet', icon: TrendingUp, color: '#10b981' },
     { label: 'Avg Score Given',   value: stats != null ? `${stats.avg_score}/100`         : '--', sub: 'Across all verdicts',  icon: Star,        color: '#6366f1' },
     { label: 'VALID Rate',        value: stats != null ? `${stats.valid_rate}%`           : '--', sub: 'Verdicts issued',      icon: CheckCircle, color: '#8b5cf6' },
     { label: 'This Month',        value: stats != null ? String(stats.this_month)         : '--', sub: 'Validations',          icon: Zap,         color: '#f59e0b' },
@@ -451,9 +451,39 @@ export default function JudgeAgentDetail() {
                     Judge
                   </span>
                   <span className="text-xs text-am-muted font-mono">v{agent.version}</span>
-                  <span className="badge-emerald text-xs">{agent.status || 'active'}</span>
+                  <span className={`text-xs px-2.5 py-0.5 rounded-full font-semibold border ${
+                    agent.status === 'pending_validation'
+                      ? 'bg-violet-50 text-violet-700 border-violet-200'
+                      : agent.status === 'rejected'
+                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                      : 'badge-emerald'
+                  }`}>
+                    {agent.status === 'pending_validation' ? 'Pending Validation'
+                     : agent.status === 'rejected'         ? 'Technical Test Failed'
+                     : agent.status || 'active'}
+                  </span>
                 </div>
                 <p className="text-sm text-am-muted mt-1 max-w-2xl">{agent.description}</p>
+
+                {/* Statut test technique */}
+                <div className="flex items-center gap-2 mt-2">
+                  {agent.status === 'active' && (
+                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 font-medium">
+                      <CheckCircle size={10} /> Juge validé
+                    </span>
+                  )}
+                  {agent.status === 'pending_validation' && (
+                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200 font-medium">
+                      <Clock size={10} /> Test technique en cours...
+                    </span>
+                  )}
+                  {agent.status === 'validation_failed' && (
+                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200 font-medium">
+                      <AlertCircle size={10} /> Validation échouée — déployez une nouvelle version
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {agent.categories?.map(c => (
                     <span key={c} className="badge badge-slate text-xs">{c}</span>
@@ -472,10 +502,16 @@ export default function JudgeAgentDetail() {
               <div className="text-right hidden sm:block">
                 <div className="text-xs text-am-muted">Agreement Rate</div>
                 <div className="text-lg font-bold" style={{ color: ACCENT }}>
-                  {stats ? `${stats.agreement_rate}%` : '--'}
+                  {hasValidations ? `${stats.agreement_rate}%` : <span className="text-sm text-am-muted italic">Not yet evaluated</span>}
                 </div>
               </div>
-              <ReputationRing score={repScore} size={60} stroke={5} />
+              {hasValidations ? (
+                <ReputationRing score={repScore} size={60} stroke={5} />
+              ) : (
+                <div className="w-[60px] h-[60px] rounded-full border-2 border-dashed border-am-border flex items-center justify-center">
+                  <span className="text-xs text-am-muted text-center leading-tight">New</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

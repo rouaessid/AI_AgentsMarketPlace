@@ -1,4 +1,4 @@
-"""
+﻿"""
 execution_service.py — Orchestration DAG pipeline + validation per-agent + scoring on-chain.
 
 Flux complet :
@@ -19,40 +19,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from app.db.pipeline_repo import update_pipeline_task
-from app.services.matching_service import AgentMatch
-from app.services.planner_service import SubTask, TaskPlan, topological_levels
-from app.services.sandbox_service import SandboxInput, SandboxService
+from app.repo.pipeline_repo import update_pipeline_task
+from app.schemas.matching import AgentMatch
+from app.schemas.pipeline import SubTask, TaskPlan, PipelineStep, PipelineResult
+from app.schemas.sandbox import SandboxInput
+from app.services.planner_service import topological_levels
+from app.services.sandbox_service import SandboxService
 
 logger      = logging.getLogger(__name__)
 sandbox_svc = SandboxService()
-
-
-# ── Dataclasses résultats ─────────────────────────────────────────────────────
-
-@dataclass
-class PipelineStep:
-    subtask_id:   str
-    agent_id:     str
-    input_prompt: str
-    output:       str
-    status:       str          # "success" | "failed" | "timeout"
-    duration_sec: float = 0.0
-    error:        str | None = None
-    proxy_cid:    str | None = None
-
-
-@dataclass
-class PipelineResult:
-    task_id:      str
-    steps:        list[PipelineStep]
-    final_output: str
-    status:       str          # "success" | "partial" | "failed"
-    proxy_cid:    str | None = None
 
 
 # ── Construction prompt d'un step ─────────────────────────────────────────────
@@ -255,10 +232,20 @@ async def execute_pipeline_task(
         }
         for s in all_steps
     ]
+    # Upload final output to IPFS — immuable, non falsifiable en DB
+    final_output_ipfs_cid = None
+    try:
+        import json as _json
+        from app.services.ipfs_service import IPFSService
+        content = _json.dumps({"task_id": task_id, "output": final_output})
+        final_output_ipfs_cid, _, _ = await IPFSService().upload(content, name=f"output-{task_id}")
+    except Exception as e:
+        logger.warning("Final output IPFS upload failed for %s: %s", task_id, e)
+
     update_pipeline_task(
         task_id,
         steps_json=steps_json,
-        final_output=final_output,
+        final_output_ipfs_cid=final_output_ipfs_cid,
         status=status if status == "failed" else "validating",
     )
 
@@ -283,7 +270,7 @@ async def _validate_per_agent(result: PipelineResult) -> None:
     Chaque agent reçoit son propre score de juges — aucune copie du lead.
     Les scores alimentent collaboration_log (mode=1) pour la matrice C d'EigenTrust.
     """
-    from app.db.access_repo import upsert_validation_session
+    from app.repo.access_repo import upsert_validation_session
 
     val_tasks: list[tuple[str, str, str]] = []   # (agent_id, val_task_id, proxy_cid)
 
@@ -294,15 +281,17 @@ async def _validate_per_agent(result: PipelineResult) -> None:
             continue
 
         agent_id    = step.agent_id
-        val_task_id = f"val-{result.task_id[:12]}-{agent_id[:8]}"
-
         # Use the proxy trace CID already uploaded by sandbox_service (contains full trajectory).
         proxy_cid = step.proxy_cid or f"step-{result.task_id[:8]}-{step.subtask_id}"
+
+        # Include last 5 chars of proxy_cid to make val_task_id unique per run.
+        # The contract rejects reuse of a previously finalised/expired task ID.
+        val_task_id = f"val-{result.task_id[:10]}-{agent_id[:6]}-{proxy_cid[-5:]}"
         if not step.proxy_cid:
             logger.warning("No proxy_cid on step %s — judges will have no trace", step.subtask_id)
 
         try:
-            upsert_validation_session(agent_id, val_task_id=val_task_id, status="pending")
+            upsert_validation_session(agent_id, val_task_id=val_task_id)
         except Exception as exc:
             logger.warning("upsert_validation_session échoué: %s", exc)
 
@@ -318,12 +307,24 @@ async def _validate_per_agent(result: PipelineResult) -> None:
                              finished_at=datetime.now(timezone.utc).isoformat())
         return
 
-    # All agents validated concurrently and independently.
-    # Judge-level semaphore in judge_service caps simultaneous containers at 6.
-    await asyncio.gather(*[
-        _run_one_validation(result.task_id, agent_id, val_task_id, proxy_cid, task_desc)
-        for agent_id, val_task_id, proxy_cid, task_desc in val_tasks
-    ], return_exceptions=True)
+    # Sequential validation: avoids judge pool exhaustion when pool size < 2×JUDGE_COUNT.
+    for agent_id, val_task_id, proxy_cid, task_desc in val_tasks:
+        await _run_one_validation(result.task_id, agent_id, val_task_id, proxy_cid, task_desc)
+
+    # EigenTrust déclenché une fois pour tous les agents du pipeline (p distribué équitablement).
+    try:
+        from app.services.judge_service import _PIPELINE_SCORES
+        from app.services.eigentrust_sync import compute_and_write_eigentrust_pipeline
+        pipeline_overrides = {}
+        for agent_id, _, _, _ in val_tasks:
+            score = _PIPELINE_SCORES.pop(agent_id, 0)
+            if score > 0:
+                pipeline_overrides[agent_id] = score
+        if pipeline_overrides:
+            logger.info("Pipeline EigenTrust: %s", pipeline_overrides)
+            asyncio.create_task(compute_and_write_eigentrust_pipeline(pipeline_overrides))
+    except Exception as _et_exc:
+        logger.warning("Pipeline EigenTrust non déclenché: %s", _et_exc)
 
     update_pipeline_task(
         result.task_id,
@@ -331,14 +332,7 @@ async def _validate_per_agent(result: PipelineResult) -> None:
         finished_at=datetime.now(timezone.utc).isoformat(),
     )
 
-    # ScoreRecorded(mode=1) vient d'être indexé par The Graph.
-    # Déclenche le recalcul EigenTrust pour mettre à jour la matrice C.
-    try:
-        from app.services.eigentrust_sync import sync_eigentrust_onchain
-        import asyncio as _asyncio
-        _asyncio.create_task(sync_eigentrust_onchain())
-    except Exception as _e:
-        logger.warning("EigenTrust sync post-pipeline échoué: %s", _e)
+    # EigenTrust déclenché par agent dans judge_service.run_validation() — pas de trigger global ici
 
 
 async def _run_one_validation(

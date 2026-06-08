@@ -1,0 +1,105 @@
+@startuml
+title Validation d'une Tâche (Solo)
+
+skinparam sequenceMessageAlign left
+skinparam backgroundColor white
+skinparam defaultFontSize 10
+skinparam ParticipantPadding 8
+skinparam BoxPadding 5
+skinparam sequenceArrowThickness 1
+skinparam sequenceDividerFontSize 10
+
+autonumber
+
+actor       "Acheteur"      as Buyer
+participant "Frontend"      as Client
+participant "Serveur"       as API
+participant "Agent"         as Agent   #LightGreen
+participant "Juges [x3]"    as Judges  #LightYellow
+participant "IPFS"          as IPFS
+participant "MetaMask"      as MM      #LightPink
+participant "ValidationReg" as VR      #LightBlue
+participant "ReputationReg" as RR      #LightBlue
+
+== Exécution ==
+
+Buyer   ->  Client  : requête(prompt)
+activate Client
+Client  ->  API     : exécuter(idTâche, prompt)
+activate API
+API     ->  Agent   : run(prompt)
+activate Agent
+Agent  -->  API     : (sortie, trace)
+deactivate Agent
+API     ->  IPFS    : upload(sortie, trace)
+activate IPFS
+IPFS   -->  API     : proxyCID
+deactivate IPFS
+
+== Validation on-chain ==
+
+API     ->  VR      : validationRequest(idTâche, agentId, proxyCID)
+activate VR
+VR     -->  API     : ok
+deactivate VR
+API     ->  VR      : assignJudges(idTâche, candidats)
+activate VR
+VR     ->  VR       : emit JudgesAssigned(idsJuges)
+VR     -->  API     : idsJuges
+deactivate VR
+API     ->  Judges  : eval(proxyCID)
+activate Judges
+Judges ->>  IPFS    : get(proxyCID)
+activate IPFS
+IPFS  -->   Judges  : trace
+deactivate IPFS
+Judges -->  API     : scores
+deactivate Judges
+
+== Commit - Reveal ==
+
+API     ->  VR      : commitVote(idTâche, idJuge, hash) [x3]
+activate VR
+VR     -->  API     : ok
+deactivate VR
+API     ->  VR      : revealVote(idTâche, idJuge, vote, scores) [x3]
+activate VR
+VR     -->  API     : ok
+deactivate VR
+API     ->  VR      : finaliseValidation(idTâche, justifURI)
+activate VR
+VR     ->  VR       : emit ScoreRecorded(agentId, score)
+VR     -->  API     : ok
+deactivate VR
+
+== Réputation ==
+
+API    ->>  API     : eigenTrust(agentId) [backend]
+activate API
+API     ->  RR      : setEigenTrustScore(tokenId, score)
+activate RR
+RR     -->  API     : ok
+deactivate RR
+deactivate API
+
+Buyer   ->  Client  : donner avis (stars)
+activate Client
+Client  ->  MM      : signer tx giveFeedback(tokenId, stars)
+activate MM
+MM      ->  RR      : giveFeedback(tokenId, stars)
+activate RR
+RR      ->  RR      : emit FeedbackGiven(tokenId, stars)
+RR     -->  MM      : ok
+deactivate RR
+MM     -->  Client  : tx confirmée
+deactivate MM
+deactivate Client
+
+API    ->>  API     : finalScore = eigenTrust × feedback [read-time]
+
+API    -->  Client  : (sortie, score)
+deactivate API
+Client -->  Buyer   : résultat(sortie, verdict)
+deactivate Client
+
+@enduml

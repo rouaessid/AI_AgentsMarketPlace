@@ -56,7 +56,8 @@ export default function AgentDetail() {
   const [agent,      setAgent]      = useState(null)
   const [loading,    setLoading]    = useState(true)
   const [tab,        setTab]        = useState('overview')
-  const [hasAccess,  setHasAccess]  = useState(false)
+  const [hasAccess,     setHasAccess]     = useState(false)
+  const [accessInfo,    setAccessInfo]    = useState(null)
   const [valStatus,  setValStatus]  = useState(null)   // full validation object
   const [purchasing, setPurchasing] = useState(false)
   const [purchaseErr,setPurchaseErr]= useState('')
@@ -101,6 +102,7 @@ export default function AgentDetail() {
     try {
       const data = await agentApi.checkAccess(agentId, wallet)
       setHasAccess(data.has_access)
+      setAccessInfo(data.has_access ? data : null)
       if (data.has_access) fetchValidation()
     } catch {}
   }, [agentId])  // eslint-disable-line
@@ -141,11 +143,11 @@ export default function AgentDetail() {
   useEffect(() => { checkAccess(walletAddress) }, [walletAddress, checkAccess])
   useEffect(() => { setRunResult(null); setRunError(null) }, [agentId])
 
-  // Poll metrics every 30s so stats update after runs/validation without manual refresh
-  useEffect(() => {
-    metricsRef.current = setInterval(fetchAgent, 30_000)
-    return () => clearInterval(metricsRef.current)
-  }, [fetchAgent])
+  // Metrics update via events (onRunComplete, fetchValidation) — no polling needed
+  // useEffect(() => {
+  //   metricsRef.current = setInterval(fetchAgent, 30_000)
+  //   return () => clearInterval(metricsRef.current)
+  // }, [fetchAgent])
 
   // ── Guard: if tab is private but no access, fall back ────────────────────
   useEffect(() => {
@@ -255,8 +257,8 @@ export default function AgentDetail() {
   const m       = agent.metrics || {}
   const isJudge = agent.agent_type === 'judge'
   const accent  = isJudge ? '#7c3aed' : '#6366f1'
-  const hasMonthlyMetrics = (m.monthly_tasks || []).length > 0
-  const hasWeeklyMetrics  = (m.weekly_success || []).length > 0
+  const hasMonthlyMetrics = (m.monthly_tasks || []).some(v => v > 0)
+  const hasWeeklyMetrics  = (m.weekly_success || []).some(v => v > 0)
   const monthlyData = (hasMonthlyMetrics ? m.monthly_tasks : Array(12).fill(0)).map((v, i) => ({ month: MONTHS[i], tasks: v }))
   const weeklyData  = (hasWeeklyMetrics  ? m.weekly_success : Array(7).fill(0)).map((v, i) => ({ day: WEEK_DAYS[i], rate: v }))
 
@@ -319,6 +321,11 @@ export default function AgentDetail() {
                 {hasAccess && (
                   <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 font-medium flex items-center gap-1">
                     <CheckCircle size={10} /> Access granted
+                    {accessInfo?.days_remaining != null && (
+                      <span className="ml-1 text-emerald-500">
+                        · {accessInfo.days_remaining}d remaining
+                      </span>
+                    )}
                   </span>
                 )}
               </div>
@@ -336,7 +343,14 @@ export default function AgentDetail() {
             </div>
 
             <div className="flex flex-col items-center sm:items-end gap-4 flex-shrink-0">
-              <ReputationRing score={hasValue(m.reputation_score) ? m.reputation_score : 0} size={80} stroke={6} />
+              <ReputationRing
+                score={
+                  reputation?.eigentrust?.final_score != null
+                    ? Math.round(reputation.eigentrust.final_score * 100)
+                    : hasValue(m.reputation_score) ? m.reputation_score : 0
+                }
+                size={80} stroke={6}
+              />
               <div className="text-right">
                 <div className="text-2xl font-bold text-am-text">{displayValue(agent.price_per_task, ' ETH')}</div>
                 <div className="text-xs text-am-muted">per task · max {displayValue(agent.max_calls_per_day)}/day</div>
@@ -366,11 +380,6 @@ export default function AgentDetail() {
             </div>
           ))}
         </div>
-
-        {/* ── Validation banner (visible after purchase) ────────────────── */}
-        {hasAccess && valStatus && (
-          <ValidationBanner valStatus={valStatus} />
-        )}
 
         {/* ── Tabs ──────────────────────────────────────────────────────── */}
         <div className="flex gap-1 p-1 rounded-xl bg-am-surface border border-am-border mb-6">
@@ -409,7 +418,7 @@ export default function AgentDetail() {
             {tab === 'overview'  && <OverviewTab agent={agent} monthlyData={monthlyData} weeklyData={weeklyData} accent={accent} hasMonthlyMetrics={hasMonthlyMetrics} hasWeeklyMetrics={hasWeeklyMetrics} agentId={agentId} reputation={reputation} onReputationRefresh={fetchReputation} valStatus={valStatus} />}
             {tab === 'readme'    && <ReadmeTab agent={agent} />}
             {tab === 'integrate' && hasAccess && <IntegrateTab agent={agent} />}
-            {tab === 'test'      && hasAccess && <TestTab agent={agent} buyerWallet={walletAddress} onValidationStarted={fetchValidation} onRunComplete={fetchAgent} result={runResult} error={runError} onResult={setRunResult} onError={setRunError} />}
+            {tab === 'test'      && hasAccess && <TestTab agent={agent} buyerWallet={walletAddress} onValidationStarted={fetchValidation} onRunComplete={fetchAgent} result={runResult} error={runError} onResult={setRunResult} onError={setRunError} agentId={agentId} accent={accent} valStatus={valStatus} onReputationRefresh={fetchReputation} />}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -641,7 +650,6 @@ function OverviewTab({ agent, monthlyData, weeklyData, accent, hasMonthlyMetrics
         </div>
       </div>
       <ReputationSection reputation={reputation} accent={accent} />
-      <RatingForm agentId={agentId} onSubmit={onReputationRefresh} accent={accent} validated={valStatus?.status === 'validated' || valStatus?.status === 'rejected'} />
     </div>
   )
 }
@@ -655,7 +663,6 @@ function ReputationSection({ reputation, accent }) {
 
   const scoreItems = et ? [
     { label: 'Final Score',   value: et.final_score   != null ? (et.final_score   * 100).toFixed(1) + '%' : '--', color: accent    },
-    { label: 'Global Trust',  value: et.global_trust  != null ? (et.global_trust  * 100).toFixed(1) + '%' : '--', color: '#10b981' },
     { label: 'Pre-Trust',     value: et.pre_trust     != null ? (et.pre_trust     * 100).toFixed(1) + '%' : '--', color: '#8b5cf6' },
     { label: 'User Feedback', value: et.user_feedback != null ? (et.user_feedback * 100).toFixed(1) + '%' : '--', color: '#f59e0b' },
   ] : []
@@ -666,8 +673,8 @@ function ReputationSection({ reputation, accent }) {
         <TrendingUp size={14} style={{ color: accent }} /> EigenTrust Reputation
       </h3>
       {et ? (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {scoreItems.map(({ label, value, color }) => (
               <div key={label} className="rounded-xl p-3 text-center border" style={{ background: `${color}08`, borderColor: `${color}20` }}>
                 <div className="text-base font-bold text-am-text">{value}</div>
@@ -699,7 +706,7 @@ function ReputationSection({ reputation, accent }) {
 
 // ── RatingForm ────────────────────────────────────────────────────────────────
 
-function RatingForm({ agentId, onSubmit, accent, validated }) {
+function RatingForm({ agentId, onSubmit, accent, validated, title }) {
   const [stars,   setStars]   = useState(0)
   const [hover,   setHover]   = useState(0)
   const [comment, setComment] = useState('')
@@ -734,7 +741,7 @@ function RatingForm({ agentId, onSubmit, accent, validated }) {
   return (
     <div className="card shadow-card-md p-5">
       <h3 className="text-sm font-semibold text-am-text mb-4 flex items-center gap-2">
-        <Star size={14} style={{ color: accent }} /> Noter cet agent
+        <Star size={14} style={{ color: accent }} /> {title || 'Noter cet agent'}
       </h3>
 
       {result && (
@@ -922,11 +929,12 @@ function IntegrateTab({ agent }) {
   )
 }
 
-function TestTab({ agent, buyerWallet, onValidationStarted, onRunComplete, result, error, onResult, onError }) {
-  const [prompt,   setPrompt]  = useState('')
-  const [params,   setParams]  = useState(Object.fromEntries((agent.env_var_keys || []).map((k) => [k, ''])))
-  const [running,  setRunning] = useState(false)
-  const [elapsed,  setElapsed] = useState(0)
+function TestTab({ agent, buyerWallet, onValidationStarted, onRunComplete, result, error, onResult, onError, agentId, accent, valStatus, onReputationRefresh }) {
+  const [prompt,              setPrompt]              = useState('')
+  const [params,              setParams]              = useState(Object.fromEntries((agent.env_var_keys || []).map((k) => [k, ''])))
+  const [running,             setRunning]             = useState(false)
+  const [elapsed,             setElapsed]             = useState(0)
+  const [validationTriggered, setValidationTriggered] = useState(false)
   const timerRef = useRef(null)
 
   useEffect(() => {
@@ -952,6 +960,7 @@ function TestTab({ agent, buyerWallet, onValidationStarted, onRunComplete, resul
       onResult(data)
       if (onRunComplete) onRunComplete()
       if (data.validation_started && onValidationStarted) {
+        setValidationTriggered(true)
         setTimeout(onValidationStarted, 2000)
       }
     } catch (e) {
@@ -1055,6 +1064,18 @@ function TestTab({ agent, buyerWallet, onValidationStarted, onRunComplete, resul
               {result.proxy_metrics.total_tokens > 0 && <span>Tokens: <b className="text-am-text">{result.proxy_metrics.total_tokens}</b></span>}
             </div>
           )}
+        </motion.div>
+      )}
+
+      {result && valStatus && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+          <ValidationBanner valStatus={valStatus} />
+        </motion.div>
+      )}
+
+      {result && valStatus && (valStatus.status === 'validated' || valStatus.status === 'rejected') && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+          <RatingForm agentId={agentId} onSubmit={onReputationRefresh} accent={accent} validated={true} title="Voulez-vous laisser votre feedback ?" />
         </motion.div>
       )}
     </div>

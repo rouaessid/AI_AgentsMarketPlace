@@ -1,0 +1,74 @@
+@startuml
+title Validation d'une Tâche (Solo) — Exécution & Validation
+
+skinparam sequenceMessageAlign left
+skinparam backgroundColor white
+skinparam defaultFontSize 10
+skinparam sequenceArrowThickness 1
+skinparam sequenceDividerFontSize 10
+
+autonumber
+
+actor       "Acheteur"      as Buyer
+participant "Frontend"      as Client
+participant "Serveur"       as API
+participant "Agent"         as Agent   #LightGreen
+participant "Juges [x3]"    as Judges  #LightYellow
+participant "IPFS"          as IPFS
+participant "ValidationReg" as VR      #LightBlue
+
+== Exécution ==
+
+Buyer   ->  Client  : soumettreTâche(prompt)
+activate Client
+Client  ->  API     : exécuter(idTâche, prompt)
+activate API
+API     ->  Agent   : run(prompt)
+activate Agent
+Agent  -->  API     : résultat + trace
+deactivate Agent
+API     ->  IPFS    : upload(trace)
+activate IPFS
+IPFS   -->  API     : cidTrace
+deactivate IPFS
+API    -->  Client  : résultat
+
+== Validation ==
+
+API     ->  VR      : demandeValidation(idTâche, agentId, cidTrace)
+activate VR
+VR     -->  API     : ok
+deactivate VR
+API     ->  VR      : assignerJuges(idTâche, candidats)
+activate VR
+VR     ->  VR       : émet JugesAssignés(idsJuges)
+activate VR
+deactivate VR
+VR     -->  API     : idsJuges
+deactivate VR
+API     ->  Judges  : évaluer(cidTrace)
+activate Judges
+Judges -->  API     : (vote, scores)
+deactivate Judges
+API     ->  VR      : commitVote(idTâche, idJuge, hash)
+activate VR
+VR     -->  API     : ok
+deactivate VR
+API     ->  VR      : revealVote(idTâche, idJuge, vote, scores)
+activate VR
+VR     -->  API     : ok
+deactivate VR
+API     ->  VR      : finaliserValidation(idTâche, justifURI)
+activate VR
+VR     ->  VR       : émet ScoreEnregistré(agentId, score)
+activate VR
+deactivate VR
+VR     -->  API     : verdict + score
+deactivate VR
+
+API    -->  Client  : verdict + score
+deactivate API
+Client -->  Buyer   : verdict + score
+deactivate Client
+
+@enduml

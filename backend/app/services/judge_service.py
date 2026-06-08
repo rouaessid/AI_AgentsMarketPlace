@@ -1,4 +1,4 @@
-"""
+﻿"""
 judge_service.py — Validation orchestrator
 -------------------------------------------
 Responsibilities:
@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -29,7 +30,7 @@ from eth_abi import encode as abi_encode
 from web3 import Web3
 
 from app.core.config import get_settings
-from app.db import access_repo
+from app.repo import access_repo
 from app.judges.base import JudgeResult
 
 logger   = logging.getLogger(__name__)
@@ -43,59 +44,63 @@ _JUDGE_SEMAPHORE = asyncio.Semaphore(6)
 # The /ipfs/{cid} proxy in main.py injects the token into the response
 # so judges receive it without us needing to re-upload to IPFS.
 _CHALLENGE_STORE: dict[str, str] = {}
+_SCORE_FROM_RECEIPT: dict[str, int] = {}   # val_task_id → aggregatedScore parsé du receipt
+_PIPELINE_SCORES:   dict[str, float] = {}  # agent_id → score, accumulé en mode=1
+
+# Serialise concurrent on-chain setups to avoid nonce collisions when multiple
+# pipeline agents submit validationRequest TXs at the same time.
+_ONCHAIN_SETUP_LOCK: asyncio.Lock | None = None
+
+def _get_onchain_lock() -> asyncio.Lock:
+    global _ONCHAIN_SETUP_LOCK
+    if _ONCHAIN_SETUP_LOCK is None:
+        _ONCHAIN_SETUP_LOCK = asyncio.Lock()
+    return _ONCHAIN_SETUP_LOCK
 
 
 def _judge_env(agent_id: str) -> dict:
     """Retourne les variables d'environnement à injecter dans le container du juge.
 
-    Chaque juge a son propre provider pour éviter le partage de rate limits :
-      alpha   → Groq        (LLM_BASE_URL=groq, JUDGE_ALPHA_GROQ_KEY)
-      beta    → OpenRouter  (LLM_BASE_URL=openrouter, JUDGE_BETA_OR_KEY)
-                fallback    → Groq (JUDGE_BETA_GROQ_KEY)
-      gamma   → Groq        (LLM_BASE_URL=groq, JUDGE_GAMMA_GROQ_KEY)
-      delta   → Gemini      (LLM_BASE_URL=gemini, JUDGE_DELTA_GEMINI_KEY)
-                fallback    → Groq (JUDGE_DELTA_GROQ_KEY)
-      epsilon → OpenRouter  (LLM_BASE_URL=openrouter, JUDGE_EPSILON_OR_KEY)
-                fallback    → Groq (JUDGE_EPSILON_GROQ_KEY)
+    Distribution providers (clés séparées, pas de quota partagé) :
+      alpha   → Groq    (JUDGE_ALPHA_GROQ_KEY)
+      beta    → Groq    (JUDGE_BETA_GROQ_KEY)
+      gamma   → Mistral (JUDGE_GAMMA_MISTRAL_KEY)
+      delta   → Mistral (JUDGE_DELTA_MISTRAL_KEY)
+      epsilon → Groq    (JUDGE_EPSILON_GROQ_KEY)
     """
-    _GROQ_URL  = "https://api.groq.com/openai/v1"
-    _OR_URL    = "https://openrouter.ai/api/v1"
-    _GEM_URL   = "https://generativelanguage.googleapis.com/v1beta/openai"
-    _GROQ_MDL  = "llama-3.1-8b-instant"
-    _OR_MDL    = "meta-llama/llama-3.1-8b-instruct"
-
     env = {"IPFS_GATEWAY": "http://host.docker.internal:8000/ipfs"}
 
     if agent_id == "judge-alpha":
         key = settings.judge_alpha_groq_key or settings.groq_api_key
-        env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
+        if key:
+            env["GROQ_API_KEY"] = key
         if settings.judge_alpha_tavily_key:
             env["TAVILY_API_KEY"] = settings.judge_alpha_tavily_key
+        return env
 
-    elif agent_id == "judge-beta":
-        if settings.judge_beta_or_key:
-            env.update({"GROQ_API_KEY": settings.judge_beta_or_key, "LLM_BASE_URL": _OR_URL, "LLM_MODEL": _OR_MDL})
-        else:
-            key = settings.judge_beta_groq_key or settings.groq_api_key
-            env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
+    if agent_id == "judge-beta":
+        key = settings.judge_beta_groq_key or settings.groq_api_key
+        if key:
+            env["GROQ_API_KEY"] = key
+        return env
 
-    elif agent_id == "judge-gamma":
-        key = settings.judge_gamma_groq_key or settings.groq_api_key
-        env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
+    if agent_id == "judge-gamma":
+        key = settings.judge_gamma_mistral_key
+        if key:
+            env["GROQ_API_KEY"] = key
+        return env
 
-    elif agent_id == "judge-delta":
-        if settings.judge_delta_gemini_key:
-            env.update({"GROQ_API_KEY": settings.judge_delta_gemini_key, "LLM_BASE_URL": _GEM_URL, "LLM_MODEL": "gemini-2.5-flash"})
-        else:
-            key = settings.judge_delta_groq_key or settings.groq_api_key
-            env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
+    if agent_id == "judge-delta":
+        key = settings.judge_delta_mistral_key
+        if key:
+            env["GROQ_API_KEY"] = key
+        return env
 
-    elif agent_id == "judge-epsilon":
-        if settings.judge_epsilon_or_key:
-            env.update({"GROQ_API_KEY": settings.judge_epsilon_or_key, "LLM_BASE_URL": _OR_URL, "LLM_MODEL": _OR_MDL})
-        else:
-            key = settings.judge_epsilon_groq_key or settings.groq_api_key
-            env.update({"GROQ_API_KEY": key, "LLM_BASE_URL": _GROQ_URL, "LLM_MODEL": _GROQ_MDL})
+    if agent_id == "judge-epsilon":
+        key = settings.judge_epsilon_groq_key or settings.groq_api_key
+        if key:
+            env["GROQ_API_KEY"] = key
+        return env
 
     return {k: v for k, v in env.items() if v}  # drop empty values
 
@@ -160,23 +165,47 @@ _VOTE_INVALID = 2
 
 # ── Minimal ValidationRegistry ABI ───────────────────────────────────────────
 
-_VALIDATION_ABI = [
-    # validationRequest: includes traceHash_ (bytes32) and mode_
-    {"inputs":[{"type":"string","name":"taskId_"},{"type":"string","name":"providerAgentId_"},{"type":"string","name":"requestURI_"},{"type":"bytes32","name":"requestHash_"},{"type":"bytes32","name":"traceHash_"},{"type":"uint8","name":"mode_"}],"name":"validationRequest","outputs":[],"stateMutability":"nonpayable","type":"function"},
-    {"inputs":[{"type":"string","name":"taskId_"},{"type":"string[]","name":"candidates_"}],"name":"assignJudges","outputs":[],"stateMutability":"nonpayable","type":"function"},
-    # commitVote: hash includes vote + 4 scores + salt
-    {"inputs":[{"type":"string","name":"taskId_"},{"type":"string","name":"judgeId_"},{"type":"bytes32","name":"commitHash_"}],"name":"commitVote","outputs":[],"stateMutability":"nonpayable","type":"function"},
-    # revealVote: includes 4 scores (uint8 each) — contract aggregates on-chain
-    {"inputs":[{"type":"string","name":"taskId_"},{"type":"string","name":"judgeId_"},{"type":"uint8","name":"vote_"},{"type":"bytes32","name":"salt_"},{"type":"uint8","name":"taskCompletion_"},{"type":"uint8","name":"outputQuality_"},{"type":"uint8","name":"noFabrication_"},{"type":"uint8","name":"toolUsage_"}],"name":"revealVote","outputs":[],"stateMutability":"nonpayable","type":"function"},
-    # finaliseValidation: aggregated score computed on-chain from judge scores
-    {"inputs":[{"type":"string","name":"taskId_"},{"type":"string","name":"justificationURI_"}],"name":"finaliseValidation","outputs":[],"stateMutability":"nonpayable","type":"function"},
-    {"inputs":[{"type":"string","name":"taskId_"}],"name":"getTraceHash","outputs":[{"type":"bytes32"}],"stateMutability":"view","type":"function"},
-]
+from app.core.abis import VALIDATION_REGISTRY_ABI as _VALIDATION_ABI
+from app.core.abis import IDENTITY_REGISTRY_ABI   as _IDENTITY_ABI
 
-# Minimal IdentityRegistry ABI — juste getAgentWallet
-_IDENTITY_ABI = [
-    {"inputs":[{"type":"string","name":"agentId_"}],"name":"getAgentWallet","outputs":[{"type":"address"}],"stateMutability":"view","type":"function"},
-]
+
+# ── IPFS justification upload ────────────────────────────────────────────────
+
+async def _build_and_upload_justifications(
+    val_task_id:      str,
+    results:          list[JudgeResult],
+    consensus:        str,
+    aggregated_score: int,
+) -> str:
+    """
+    Construit un document JSON agrégé de tous les verdicts juges et l'upload sur IPFS.
+    Le CID est ancré on-chain via finaliseValidation(justificationURI_).
+    Retourne l'URI IPFS ou un fallback si l'upload échoue.
+    """
+    import json as _json
+    from app.services.ipfs_service import IPFSService
+    doc = _json.dumps({
+        "task_id":          val_task_id,
+        "consensus":        consensus,
+        "aggregated_score": aggregated_score,
+        "judges": [
+            {
+                "judge_id":      r.judge_id,
+                "judge_name":    r.judge_name,
+                "score":         r.score,
+                "verdict":       r.verdict,
+                "justification": r.justification,
+            }
+            for r in results
+        ],
+    })
+    try:
+        cid, _, _ = await IPFSService().upload(doc, name=f"verdicts-{val_task_id}")
+        logger.info("[val] Justifications uploaded to IPFS: %s", cid)
+        return f"ipfs://{cid}"
+    except Exception as e:
+        logger.warning("[val] Justification IPFS upload failed: %s", e)
+        return f"ipfs://val-{val_task_id}"  # fallback non-résolvable mais non-bloquant
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -187,7 +216,7 @@ async def run_validation(
     proxy_cid:        str,
     mode:             int = 0,
     task_description: str = "",
-) -> None:
+) -> bool:
     """
     Full validation flow. Called as a FastAPI BackgroundTask after each Run.
     mode=0 (solo): agent seul évalué sur sa tâche complète.
@@ -199,23 +228,14 @@ async def run_validation(
 
     access_repo.upsert_validation_session(
         agent_id, val_task_id=val_task_id,
-        status="in_progress",
         started_at=datetime.now(timezone.utc).isoformat(),
     )
-    access_repo.clear_judge_verdicts(agent_id)
 
     try:
         await _run_validation_inner(agent_id, val_task_id, proxy_cid, mode, task_description)
     except Exception as exc:
         logger.error("[val] UNHANDLED EXCEPTION agent=%s: %s", agent_id, exc, exc_info=True)
-        access_repo.upsert_validation_session(
-            agent_id,
-            val_task_id=val_task_id,
-            status="failed",
-            consensus_verdict="INVALID",
-            aggregated_score=0,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-        )
+        access_repo.upsert_validation_session(agent_id, val_task_id=val_task_id)
 
 
 async def _run_validation_inner(
@@ -225,28 +245,97 @@ async def _run_validation_inner(
     mode:             int,
     task_description: str,
 ) -> None:
-    # ── 1. Protocole de vérification ─────────────────────────────────────
+    loop = asyncio.get_event_loop()
+
+    # ── 1. Protocol setup ────────────────────────────────────────────────
     real_trace      = _load_trace_ipfs(proxy_cid)
     challenge_token = secrets.token_hex(8)
     _register_challenge_token(proxy_cid, real_trace, challenge_token)
-    # traceHash committed on-chain before judges run — prevents post-hoc trace manipulation
     trace_bytes = json.dumps(real_trace, ensure_ascii=False, sort_keys=True).encode()
-    trace_hash  = bytes(Web3.keccak(trace_bytes))  # bytes32
+    trace_hash  = bytes(Web3.keccak(trace_bytes))
 
-    # ── 2. Sélection + run des juges ──────────────────────────────────────
-    selected_judges: list = []
+    # ── 2. Select judge candidates (cosine + rep, no run yet) ────────────
+    registered = _get_registered_judges()
     try:
-        results, selected_judges = await asyncio.wait_for(
-            _run_judges(
-                proxy_cid,
-                task_description=task_description,
+        candidates = await loop.run_in_executor(
+            None, _select_judge_candidates, task_description, registered
+        )
+    except Exception as exc:
+        logger.warning("[val] Candidate selection failed — using all registered: %s", exc)
+        candidates = registered
+
+    if len(candidates) < 3:
+        logger.error("[val] Not enough judge candidates (%d/3) — aborting", len(candidates))
+        access_repo.upsert_validation_session(agent_id, val_task_id="FAILED")
+        return
+
+    # ── 3. On-chain: validationRequest + assignJudges ────────────────────
+    onchain_enabled = bool(
+        settings.validation_registry_address and
+        settings.platform_private_key and
+        settings.identity_registry_address
+    )
+    assigned_ids: list[str] = []
+    judge_keys:   list[str] = []
+
+    if onchain_enabled:
+        _max_setup_attempts = 4
+        _retry_delay_s      = 45
+        _last_setup_exc: Exception | None = None
+        for _attempt in range(_max_setup_attempts):
+            try:
+                async with _get_onchain_lock():
+                    assigned_ids, judge_keys = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None, _onchain_setup_sync,
+                            agent_id, val_task_id, proxy_cid, mode, trace_hash,
+                            [j.agent_id for j in candidates],
+                        ),
+                        timeout=120.0,
+                    )
+                logger.info("[val] On-chain assigned: %s", assigned_ids)
+                _last_setup_exc = None
+                break
+            except Exception as _e:
+                _last_setup_exc = _e
+                if _attempt < _max_setup_attempts - 1:
+                    logger.warning(
+                        "[val] On-chain setup attempt %d/%d failed — retrying in %ds: %s",
+                        _attempt + 1, _max_setup_attempts, _retry_delay_s, _e,
+                    )
+                    await asyncio.sleep(_retry_delay_s)
+        if _last_setup_exc is not None:
+            logger.error("[val] On-chain setup failed after %d attempts: %s",
+                         _max_setup_attempts, _last_setup_exc)
+            access_repo.upsert_validation_session(agent_id, val_task_id="FAILED")
+            return
+    else:
+        logger.info("[val] On-chain disabled — using first 3 candidates")
+        assigned_ids = [j.agent_id for j in candidates[:3]]
+
+    # ── 4. Run the on-chain assigned judges ──────────────────────────────
+    id_set          = set(assigned_ids)
+    assigned_records = sorted(
+        [j for j in registered if j.agent_id in id_set],
+        key=lambda j: assigned_ids.index(j.agent_id),
+    )
+    if len(assigned_records) < 3:
+        logger.error("[val] Assigned judges not all registered locally (%d/3) — aborting",
+                     len(assigned_records))
+        access_repo.upsert_validation_session(agent_id, val_task_id="FAILED")
+        return
+
+    try:
+        results = await asyncio.wait_for(
+            _run_registered_judges(
+                proxy_cid, assigned_records,
                 challenge_token=challenge_token,
                 real_trace=real_trace,
             ),
             timeout=180.0,
         )
     except (asyncio.TimeoutError, TimeoutError):
-        logger.error("[val] Judge validation timed out after 180s — agent=%s", agent_id)
+        logger.error("[val] Judge execution timed out after 180s — agent=%s", agent_id)
         results = [JudgeResult(
             judge_id="timeout", judge_name="Timeout",
             score=0, verdict="INVALID",
@@ -254,7 +343,6 @@ async def _run_validation_inner(
         )]
 
     if not results:
-        logger.error("[val] No judge results for agent=%s — marking failed", agent_id)
         results = [JudgeResult(
             judge_id="no-result", judge_name="No Result",
             score=0, verdict="INVALID",
@@ -262,149 +350,95 @@ async def _run_validation_inner(
         )]
 
     for r in results:
-        try:
-            access_repo.insert_judge_verdict(
-                agent_id=agent_id,
-                judge_id=r.judge_id,
-                judge_name=r.judge_name,
-                score=r.score,
-                justification=r.justification,
-                verdict=r.verdict,
-            )
-        except Exception as e:
-            logger.warning("[val] Could not insert verdict for judge=%s: %s", r.judge_id, e)
         logger.info("[val] %s → %s (%d/100)", r.judge_id, r.verdict, r.score)
 
-    # ── 3. Consensus ──────────────────────────────────────────────────────
-    valid_count  = sum(1 for r in results if r.verdict == "VALID")
-    scores       = [r.score for r in results]
-    avg_score    = sum(scores) // max(1, len(scores))
-    divergence   = (max(scores) - min(scores)) if len(scores) >= 2 else 0
-    consensus    = (
+    # ── 5. Consensus ─────────────────────────────────────────────────────
+    valid_count      = sum(1 for r in results if r.verdict == "VALID")
+    scores           = [r.score for r in results]
+    avg_score        = sum(scores) // max(1, len(scores))
+    divergence       = (max(scores) - min(scores)) if len(scores) >= 2 else 0
+    consensus        = (
         "VALID"
         if valid_count >= 2 and avg_score >= 65 and divergence <= 35
         else "INVALID"
     )
     aggregated_score = avg_score
-
     logger.info("[val] consensus=%s score=%d (%d/%d VALID) divergence=%d",
                 consensus, aggregated_score, valid_count, len(results), divergence)
 
-    # ── 4. On-chain commit-reveal ─────────────────────────────────────────
-    await _onchain_flow(agent_id, val_task_id, proxy_cid, results, mode, selected_judges, trace_hash)
-
-    # ── 5. Persist final result ───────────────────────────────────────────
-    _CHALLENGE_STORE.pop(proxy_cid, None)
-    final_status = "validated" if consensus == "VALID" else "rejected"
-    access_repo.upsert_validation_session(
-        agent_id,
-        val_task_id=val_task_id,
-        status=final_status,
-        consensus_verdict=consensus,
-        aggregated_score=aggregated_score,
-        finished_at=datetime.now(timezone.utc).isoformat(),
+    # ── 6. Upload justifications to IPFS ─────────────────────────────────
+    justification_uri = await _build_and_upload_justifications(
+        val_task_id, results, consensus, aggregated_score
     )
 
-    # ── 6. Update agent reputation metrics ───────────────────────────────
+    # ── 7. On-chain: commits + reveals + finalise ─────────────────────────
+    onchain_ok = False
+    if onchain_enabled and judge_keys:
+        try:
+            onchain_ok = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, _onchain_conclude_sync,
+                    val_task_id, results, assigned_ids, judge_keys, justification_uri,
+                ),
+                timeout=120.0,
+            )
+        except Exception as e:
+            logger.warning("[val] On-chain conclude failed: %s", e)
+
+    # ── 8. Read authoritative verdict + persist ───────────────────────────
+    onchain_verdict = _read_onchain_verdict(val_task_id) if onchain_ok else None
+    onchain_verdict = onchain_verdict or consensus
+
+    _CHALLENGE_STORE.pop(proxy_cid, None)
+    access_repo.upsert_validation_session(
+        agent_id, val_task_id=val_task_id if onchain_ok else "FAILED"
+    )
+
+    # ── 9. Agent reputation metrics ───────────────────────────────────────
     try:
         from app.services.agent_service import AgentService
-        AgentService().update_validation_metrics(
-            agent_id,
-            verdict=consensus,
-            score=float(aggregated_score),
-        )
+        AgentService().update_validation_metrics(agent_id, score=float(aggregated_score))
     except Exception as e:
         logger.warning("[val] Could not update agent reputation metrics: %s", e)
 
-    # ── 7. Déclenche EigenTrust sync (solo mode=0 et pipeline mode=1) ────
-    # ScoreRecorded vient d'être émis on-chain → The Graph va l'indexer.
-    # Le sync lit les nouveaux scores et met à jour tag1="eigenTrust" on-chain.
+    # ── 10. EigenTrust — score from finaliseValidation receipt ───────────
     try:
-        from app.services.eigentrust_sync import sync_eigentrust_onchain
-        asyncio.create_task(sync_eigentrust_onchain())
+        fresh_score = float(_SCORE_FROM_RECEIPT.pop(val_task_id, 0) or 0)
+        if mode == 0:
+            # Solo: déclenché immédiatement par agent
+            from app.services.eigentrust_sync import compute_and_write_eigentrust
+            asyncio.create_task(compute_and_write_eigentrust(agent_id, fresh_score))
+        elif fresh_score > 0:
+            # Pipeline: accumulate — execution_service déclenchera une fois pour tous
+            _PIPELINE_SCORES[agent_id] = fresh_score
     except Exception as e:
-        logger.warning("[val] EigenTrust sync non déclenché: %s", e)
+        logger.warning("[val] EigenTrust non déclenché: %s", e)
 
-    # ── 7. Update judge agreement rates (DB) ─────────────────────────────
-    # JudgeScoreUpdated est émis on-chain par ValidationRegistry._applyOutcomes()
+    # ── 11. Judge agreement rates ─────────────────────────────────────────
     _update_judge_agreements(results, consensus)
 
-    logger.info("[val] DONE agent=%s → %s", agent_id, final_status)
+    logger.info("[val] DONE agent=%s → %s", agent_id, onchain_verdict)
 
 
 _COSINE_W = 0.7
 _REP_W    = 0.3
 
 
-# ── Judge dispatch — registered containers only (no fallback) ────────────────
-
-async def _run_judges(
-    proxy_cid:        str,
-    task_description: str = "",
-    challenge_token:  str = "",
-    real_trace:       dict | None = None,
-) -> tuple[list[JudgeResult], list]:
+def _select_judge_candidates(task_description: str, registered: list, n: int = 5) -> list:
     """
-    Run only registered judge agents (Docker containers).
-    Returns (results, selected_judge_records) so on-chain uses the SAME judges.
+    Select top N judge candidates by cosine similarity + reputation.
+    These are passed as candidates to assignJudges — the contract picks 3 via Fisher-Yates.
+    Returns all registered if fewer than N are available.
     """
-    registered = _get_registered_judges()
+    if len(registered) <= n:
+        return registered
 
-    if not registered:
-        logger.error("[val] No judge agents registered — validation cannot proceed.")
-        return [JudgeResult(
-            judge_id="no-judges", judge_name="No Judges", score=0, verdict="INVALID",
-            justification=(
-                "Validation aborted: no judge agents are registered on the platform. "
-                "Register judge-alpha, judge-beta, and judge-gamma via the frontend."
-            ),
-        )], []
-
-    if len(registered) < 3:
-        logger.error(
-            "[val] Only %d/3 judge agents active — validation requires exactly 3 judges.",
-            len(registered),
-        )
-        return [JudgeResult(
-            judge_id="insufficient-judges", judge_name="Insufficient Judges",
-            score=0, verdict="INVALID",
-            justification=(
-                f"Validation aborted: only {len(registered)}/3 judge agents are active. "
-                "All three judge agents must be registered and active."
-            ),
-        )], registered
-
-    loop = asyncio.get_event_loop()
-    try:
-        logger.info("[val] Selecting judges for task_description=%r", task_description[:120])
-        selected = await loop.run_in_executor(None, _select_judges_for_task, task_description, registered)
-    except Exception as exc:
-        logger.exception("[val] Judge selection failed — using registered-order fallback: %s", exc)
-        selected = registered[:3]
-    logger.info("[val] Selected %d judge(s): %s", len(selected), [j.agent_id for j in selected])
-    results = await _run_registered_judges(
-        proxy_cid, selected,
-        challenge_token=challenge_token,
-        real_trace=real_trace or {},
-    )
-    return results, selected
-
-
-def _select_judges_for_task(task_description: str, registered: list) -> list:
-    """
-    Sélectionne les 3 meilleurs juges par :
-      score = 0.7 × cosine(task_embedding, judge_embedding)
-            + 0.3 × agreement_rate
-
-    agreement_rate ∈ [0,1] — 0.5 par défaut (neutre) avant la 1ère validation.
-    """
     from app.services.matching_service import compute_embedding, cosine_similarity, _load_judges_with_embeddings
-    from app.services.graph_client import get_judge_reputation
+    from app.services.graph_client import get_judge_agreement_rate
 
     judges_with_emb = _load_judges_with_embeddings()
     emb_map = {j["agent_id"]: j["embedding"] for j in judges_with_emb}
-    # agreement_rate from The Graph JudgeScore (calculated on-chain by ValidationRegistry)
-    rep_map = {j["agent_id"]: get_judge_reputation(j["agent_id"])["agreement_rate"]
+    rep_map = {j["agent_id"]: get_judge_agreement_rate(j["agent_id"])["agreement_rate"]
                for j in judges_with_emb}
 
     task_emb = compute_embedding(task_description) if task_description.strip() else None
@@ -416,22 +450,12 @@ def _select_judges_for_task(task_description: str, registered: list) -> list:
         rep = rep_map.get(judge.agent_id, 0.5)
         score = _COSINE_W * cos + _REP_W * rep
         scored.append((score, judge))
-        logger.debug("[val] Judge %s: cos=%.3f rep=%.3f → %.3f",
-                     judge.agent_id, cos, rep, score)
+        logger.debug("[val] Judge %s: cos=%.3f rep=%.3f → %.3f", judge.agent_id, cos, rep, score)
 
     scored.sort(key=lambda x: x[0], reverse=True)
-
-    if len(scored) <= 3:
-        return [j for _, j in scored]
-
-    # 2 best (quality) + 1 random from the rest (rotation — gives new judges a chance)
-    import random
-    top_2 = [j for _, j in scored[:2]]
-    remaining = [j for _, j in scored[2:]]
-    rotation_pick = random.choice(remaining)
-    logger.info("[val] Judge selection: top2=%s + rotation=%s",
-                [j.agent_id for j in top_2], rotation_pick.agent_id)
-    return top_2 + [rotation_pick]
+    candidates = [j for _, j in scored[:n]]
+    logger.info("[val] Candidates selected (%d): %s", len(candidates), [j.agent_id for j in candidates])
+    return candidates
 
 
 # ── Mise à jour réputation juges après consensus ──────────────────────────────
@@ -647,37 +671,121 @@ def _build_wallet_key_map() -> dict[str, str]:
     return result
 
 
-# ── On-chain commit-reveal ────────────────────────────────────────────────────
+# ── Lecture verdict autoritatif depuis le contrat ────────────────────────────
 
-async def _onchain_flow(
-    agent_id:        str,
-    val_task_id:     str,
-    proxy_cid:       str,
-    results:         list[JudgeResult],
-    mode:            int = 0,
-    selected_judges: list | None = None,
-    trace_hash:      bytes | None = None,
-) -> None:
-    if not (settings.validation_registry_address and settings.platform_private_key
-            and settings.identity_registry_address):
-        logger.info("[val] On-chain disabled (missing config) — off-chain only")
-        return
-
-    loop = asyncio.get_event_loop()
+def _read_onchain_verdict(val_task_id: str) -> str | None:
+    """
+    Lit ValidationTask.finalTag directement via RPC après finaliseValidation().
+    Variable d'état — disponible immédiatement sans attendre The Graph.
+    Retourne "VALID", "INVALID", "DISPUTED" ou None si indisponible.
+    """
+    if not settings.validation_registry_address:
+        return None
     try:
-        await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                _onchain_flow_sync,
-                agent_id, val_task_id, proxy_cid, results, mode,
-                selected_judges or [], trace_hash or b"\x00" * 32,
-            ),
-            timeout=120.0,
+        w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 5}))
+        registry = w3.eth.contract(
+            address=Web3.to_checksum_address(settings.validation_registry_address),
+            abi=_VALIDATION_ABI,
         )
-    except (asyncio.TimeoutError, TimeoutError):
-        logger.warning("[val] On-chain flow timed out after 120s — off-chain result kept")
+        task = registry.functions.getTask(val_task_id).call()
+        # ValidationTask tuple index 13 : taskId(0) providerAgentId(1) providerWallet(2)
+        # requestHash(3) traceHash(4) erc8004AgentId(5) status(6) createdAt(7)
+        # commitDeadline(8) revealDeadline(9) judgeIds(10) judgeWallets(11)
+        # finalResponse(12) finalTag(13) score(14) mode(15)
+        final_tag = task[13] if isinstance(task, (list, tuple)) else getattr(task, "finalTag", None)
+        return final_tag if final_tag in ("VALID", "INVALID", "DISPUTED") else None
     except Exception as e:
-        logger.warning("[val] On-chain flow failed (off-chain result kept): %s", e)
+        # 0x3e0100ea = TaskNotFound(string) — expected before validationRequest is mined
+        if "0x3e0100ea" not in str(e):
+            logger.debug("[val] Could not read on-chain verdict for %s: %s", val_task_id, e)
+        return None
+
+
+# ── On-chain phase 1 : validationRequest + assignJudges ──────────────────────
+
+def _onchain_setup_sync(
+    agent_id:      str,
+    val_task_id:   str,
+    proxy_cid:     str,
+    mode:          int,
+    trace_hash:    bytes,
+    candidate_ids: list[str],
+) -> tuple[list[str], list[str]]:
+    """
+    Submit validationRequest + assignJudges on-chain.
+    Returns (assigned_judge_ids, judge_private_keys).
+    """
+    w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 10}))
+    registry = w3.eth.contract(
+        address=Web3.to_checksum_address(settings.validation_registry_address),
+        abi=_VALIDATION_ABI,
+    )
+
+    req_hash = bytes(Web3.keccak(text=f"{agent_id}|{proxy_cid}"))
+    ipfs_uri = f"ipfs://{proxy_cid}"
+    th       = trace_hash if (trace_hash and len(trace_hash) == 32) else b"\x00" * 32
+
+    logger.info("[val] Using contract=%s  task=%s", registry.address, val_task_id)
+
+    # Crash recovery: check if task already exists
+    _preexisting = None
+    try:
+        _preexisting = registry.functions.getTask(val_task_id).call()
+    except Exception:
+        pass
+
+    if _preexisting is not None:
+        status = _preexisting[6]
+        if status in (1, 2):
+            logger.warning("[val] Task %s stuck (status=%d) — expiring", val_task_id, status)
+            try:
+                _send(w3, settings.platform_private_key,
+                      registry.functions.expireTask(val_task_id), gas=500_000)
+                logger.info("[val] expireTask OK")
+            except Exception as _ee:
+                logger.warning("[val] expireTask failed: %s", _ee)
+            raise RuntimeError(f"Task {val_task_id} was stuck (status={status}), now expired.")
+        elif status >= 3:
+            raise RuntimeError(f"Task {val_task_id} already finalised/expired (status={status})")
+        # status == 0 (PENDING): validationRequest already done, skip to assignJudges
+
+    if _preexisting is None:
+        txh_vr, _ = _send(w3, settings.platform_private_key,
+                          registry.functions.validationRequest(
+                              val_task_id, agent_id, ipfs_uri, req_hash, th, mode))
+        logger.info("[val] validationRequest TX=%s", txh_vr)
+        for _attempt in range(3):
+            try:
+                registry.functions.getTask(val_task_id).call()
+                break
+            except Exception as _e:
+                if _attempt == 2:
+                    raise RuntimeError(f"Task {val_task_id} not found after TX: {_e}") from _e
+                logger.warning("[val] getTask attempt %d/3 — retrying in 3s", _attempt + 1)
+                time.sleep(3)
+
+    txh_aj, aj_receipt = _send(w3, settings.platform_private_key,
+                               registry.functions.assignJudges(val_task_id, candidate_ids),
+                               gas=600_000)
+    logger.info("[val] assignJudges TX=%s", txh_aj)
+
+    try:
+        _ev        = registry.events.JudgesAssigned().process_receipt(aj_receipt)[0]["args"]
+        judge_ids  = [_ev["judge0"], _ev["judge1"], _ev["judge2"]]
+        logger.info("[val] On-chain assigned judges: %s  commit=%d reveal=%d",
+                    judge_ids, _ev["commitDeadline"], _ev["revealDeadline"])
+    except Exception as _ep:
+        logger.warning("[val] JudgesAssigned event parse failed — fallback getTask: %s", _ep)
+        task_state = registry.functions.getTask(val_task_id).call()
+        judge_ids  = list(task_state[10])
+        logger.info("[val] On-chain assigned judges (getTask): %s", judge_ids)
+
+    identity = w3.eth.contract(
+        address=Web3.to_checksum_address(settings.identity_registry_address),
+        abi=_IDENTITY_ABI,
+    )
+    judge_keys = _resolve_judge_keys(identity, judge_ids, _build_wallet_key_map())
+    return judge_ids, judge_keys
 
 
 def _resolve_judge_keys(identity, judge_ids: list[str], wallet_key_map: dict) -> list[str]:
@@ -688,7 +796,6 @@ def _resolve_judge_keys(identity, judge_ids: list[str], wallet_key_map: dict) ->
         cached = get_agent_from_cache(jid)
         wallet = (cached.get("owner_address") or "").lower() if cached else ""
         if not wallet:
-            # fallback: ask the contract
             try:
                 wallet = identity.functions.getAgentWallet(jid).call().lower()
             except Exception:
@@ -703,16 +810,19 @@ def _resolve_judge_keys(identity, judge_ids: list[str], wallet_key_map: dict) ->
     return keys
 
 
-def _onchain_flow_sync(
-    agent_id:        str,
-    val_task_id:     str,
-    proxy_cid:       str,
-    results:         list[JudgeResult],
-    mode:            int = 0,
-    selected_judges: list | None = None,
-    trace_hash:      bytes | None = None,
-) -> None:
-    """Synchronous on-chain flow — runs in a thread via run_in_executor."""
+# ── On-chain phase 2 : commitVote + revealVote + finaliseValidation ───────────
+
+def _onchain_conclude_sync(
+    val_task_id:       str,
+    results:           list[JudgeResult],
+    judge_ids:         list[str],
+    judge_keys:        list[str],
+    justification_uri: str,
+) -> bool:
+    """
+    Submit commits, reveals, then finaliseValidation.
+    Returns True on success.
+    """
     try:
         w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 10}))
         registry = w3.eth.contract(
@@ -720,84 +830,113 @@ def _onchain_flow_sync(
             abi=_VALIDATION_ABI,
         )
 
-        req_hash = bytes(Web3.keccak(text=f"{agent_id}|{proxy_cid}"))
-        ipfs_uri = f"ipfs://{proxy_cid}"
-        th       = trace_hash if (trace_hash and len(trace_hash) == 32) else b"\x00" * 32
-
-        _send(w3, settings.platform_private_key,
-              registry.functions.validationRequest(
-                  val_task_id, agent_id, ipfs_uri, req_hash, th, mode))
-
-        judges = selected_judges if selected_judges else _get_registered_judges()
-        if len(judges) < 3:
-            logger.error(
-                "[val] Not enough selected judges (%d/3). On-chain flow aborted.",
-                len(judges),
-            )
-            return
-
-        judge_ids = [j.agent_id for j in judges[:3]]
-        _send(w3, settings.platform_private_key,
-              registry.functions.assignJudges(val_task_id, judge_ids))
-
-        identity = w3.eth.contract(
-            address=Web3.to_checksum_address(settings.identity_registry_address),
-            abi=_IDENTITY_ABI,
-        )
-        wallet_key_map = _build_wallet_key_map()
-        judge_keys = _resolve_judge_keys(identity, judge_ids, wallet_key_map)
-
         result_map = {r.judge_id: r for r in results}
-        valid_count = sum(1 for r in results if r.verdict == "VALID")
-        fallback_verdict = "VALID" if valid_count >= 2 else "INVALID"
 
-        # Commit: hash includes vote + all 4 scores + salt (matches Solidity formula)
-        salts      = []
-        judge_data = []
-        for key, jid in zip(judge_keys, judge_ids):
+        # Build commit hashes
+        salts: list[bytes] = []
+        judge_data: list[tuple] = []
+        commit_hashes: list[bytes] = []
+        for jid in judge_ids:
             res = result_map.get(jid)
             if res and res.criteria:
-                verdict = res.verdict
-                tc  = res.criteria.get("task_completion", 0)
-                oq  = res.criteria.get("output_quality",  0)
-                nf  = res.criteria.get("no_fabrication",  0)
-                tu  = res.criteria.get("tool_usage",      0)
+                vote = _VOTE_VALID if res.verdict == "VALID" else _VOTE_INVALID
+                tc = res.criteria.get("task_completion", 0)
+                oq = res.criteria.get("output_quality",  0)
+                nf = res.criteria.get("no_fabrication",  0)
+                tu = res.criteria.get("tool_usage",      0)
             else:
-                verdict = fallback_verdict
+                logger.warning("[val] Judge %s has no result (shouldn't happen)", jid)
+                vote = _VOTE_INVALID
                 tc = oq = nf = tu = 0
-            vote = _VOTE_VALID if verdict == "VALID" else _VOTE_INVALID
             salt = secrets.token_bytes(32)
             salts.append(salt)
             judge_data.append((vote, tc, oq, nf, tu))
-            chash = bytes(Web3.keccak(
-                abi_encode(
-                    ["uint8", "uint8", "uint8", "uint8", "uint8", "bytes32"],
-                    [vote, tc, oq, nf, tu, salt],
-                )
-            ))
-            _send(w3, key, registry.functions.commitVote(val_task_id, jid, chash))
+            commit_hashes.append(bytes(Web3.keccak(
+                abi_encode(["uint8", "uint8", "uint8", "uint8", "uint8", "bytes32"],
+                           [vote, tc, oq, nf, tu, salt])
+            )))
 
-        # Reveal: pass all 4 scores explicitly — contract aggregates on-chain
-        for key, jid, salt, (vote, tc, oq, nf, tu) in zip(
-            judge_keys, judge_ids, salts, judge_data
-        ):
-            _send(w3, key,
-                  registry.functions.revealVote(
-                      val_task_id, jid, vote, salt, tc, oq, nf, tu))
+        # Fire-and-forget commits
+        _wallet_nonce: dict[str, int] = {}
+        _commit_pending: list[tuple] = []
+        for key, jid, chash in zip(judge_keys, judge_ids, commit_hashes):
+            _acct = w3.eth.account.from_key(key)
+            _addr = _acct.address
+            if _addr not in _wallet_nonce:
+                _wallet_nonce[_addr] = w3.eth.get_transaction_count(_addr, "pending")
+            _nonce = _wallet_nonce[_addr]; _wallet_nonce[_addr] += 1
+            _fn  = registry.functions.commitVote(val_task_id, jid, chash)
+            _tx  = _fn.build_transaction({"from": _addr, "nonce": _nonce,
+                                           "gas": 1_200_000, "gasPrice": w3.eth.gas_price})
+            _sig = w3.eth.account.sign_transaction(_tx, key)
+            _txh = w3.eth.send_raw_transaction(_sig.raw_transaction)
+            _commit_pending.append((_txh, _tx))
+            logger.info("[val] commitVote submitted: jid=%s nonce=%d txh=%s", jid, _nonce, _txh.hex())
 
-        # finaliseValidation: aggregated score computed on-chain from judge scores
-        _send(w3, settings.platform_private_key,
-              registry.functions.finaliseValidation(
-                  val_task_id, f"ipfs://val-{val_task_id}"))
+        for _txh, _tx in _commit_pending:
+            _rcpt = w3.eth.wait_for_transaction_receipt(_txh, timeout=120)
+            if _rcpt["status"] != 1:
+                try:
+                    w3.eth.call({"to": _rcpt["to"], "data": _tx["data"],
+                                 "from": _tx["from"], "gas": _tx["gas"]}, _rcpt["blockNumber"])
+                except Exception as _ce:
+                    raise RuntimeError(f"commitVote reverted ({_txh.hex()}): {_ce}") from _ce
+                raise RuntimeError(f"commitVote reverted (no reason): {_txh.hex()}")
+        logger.info("[val] All commits confirmed")
+
+        # Fire-and-forget reveals
+        _wallet_nonce = {}
+        _reveal_pending: list[tuple] = []
+        for key, jid, salt, (vote, tc, oq, nf, tu) in zip(judge_keys, judge_ids, salts, judge_data):
+            _acct = w3.eth.account.from_key(key)
+            _addr = _acct.address
+            if _addr not in _wallet_nonce:
+                _wallet_nonce[_addr] = w3.eth.get_transaction_count(_addr, "pending")
+            _nonce = _wallet_nonce[_addr]; _wallet_nonce[_addr] += 1
+            _fn  = registry.functions.revealVote(val_task_id, jid, vote, salt, tc, oq, nf, tu)
+            _tx  = _fn.build_transaction({"from": _addr, "nonce": _nonce,
+                                           "gas": 1_200_000, "gasPrice": w3.eth.gas_price})
+            _sig = w3.eth.account.sign_transaction(_tx, key)
+            _txh = w3.eth.send_raw_transaction(_sig.raw_transaction)
+            _reveal_pending.append((_txh, _tx))
+            logger.info("[val] revealVote submitted: jid=%s nonce=%d txh=%s", jid, _nonce, _txh.hex())
+
+        for _txh, _tx in _reveal_pending:
+            _rcpt = w3.eth.wait_for_transaction_receipt(_txh, timeout=120)
+            if _rcpt["status"] != 1:
+                try:
+                    w3.eth.call({"to": _rcpt["to"], "data": _tx["data"],
+                                 "from": _tx["from"], "gas": _tx["gas"]}, _rcpt["blockNumber"])
+                except Exception as _ce:
+                    raise RuntimeError(f"revealVote reverted ({_txh.hex()}): {_ce}") from _ce
+                raise RuntimeError(f"revealVote reverted (no reason): {_txh.hex()}")
+        logger.info("[val] All reveals confirmed")
+
+        _, finalise_receipt = _send(w3, settings.platform_private_key,
+                                    registry.functions.finaliseValidation(
+                                        val_task_id,
+                                        justification_uri or f"ipfs://val-{val_task_id}"))
         logger.info("[val] On-chain finalised ✓")
 
+        try:
+            score_events = registry.events.ScoreRecorded().process_receipt(finalise_receipt)
+            if score_events:
+                _SCORE_FROM_RECEIPT[val_task_id] = int(score_events[0]["args"]["score"])
+                logger.info("[val] ScoreRecorded parsé: score=%d", _SCORE_FROM_RECEIPT[val_task_id])
+        except Exception as _pe:
+            logger.warning("[val] ScoreRecorded parse échoué: %s", _pe)
+
+        return True
+
     except Exception as e:
-        logger.warning("[val] On-chain flow failed (off-chain result kept): %s", e)
+        logger.exception("[val] On-chain conclude failed: %s", e)
+        return False
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _send(w3: Web3, private_key: str, fn, gas: int = 500_000) -> str:
+def _send(w3: Web3, private_key: str, fn, gas: int = 1_200_000):
+    """Returns (txHash, receipt)."""
     account = w3.eth.account.from_key(private_key)
     nonce   = w3.eth.get_transaction_count(account.address, "pending")
     tx      = fn.build_transaction({
@@ -806,9 +945,20 @@ def _send(w3: Web3, private_key: str, fn, gas: int = 500_000) -> str:
     })
     signed  = w3.eth.account.sign_transaction(tx, private_key)
     txh     = w3.eth.send_raw_transaction(signed.raw_transaction)
-    receipt = w3.eth.wait_for_transaction_receipt(txh, timeout=60)
+    receipt = w3.eth.wait_for_transaction_receipt(txh, timeout=120)
     if receipt["status"] != 1:
-        raise RuntimeError(f"TX reverted: {txh.hex()}")
-    return txh.hex()
+        _call_params = {"to": receipt["to"], "data": tx["data"],
+                        "from": account.address, "gas": gas}
+        # Replay at the exact revert block; fall back to "latest" if the RPC node
+        # doesn't have that block (common on Base Sepolia public nodes).
+        for _block_ref in [receipt["blockNumber"], "latest"]:
+            try:
+                w3.eth.call(_call_params, _block_ref)
+            except Exception as _ce:
+                if "block not found" in str(_ce).lower() and _block_ref == receipt["blockNumber"]:
+                    continue  # retry at "latest"
+                raise RuntimeError(f"TX reverted ({txh.hex()}): {_ce}") from _ce
+        raise RuntimeError(f"TX reverted (no reason): {txh.hex()}")
+    return txh.hex(), receipt
 
 

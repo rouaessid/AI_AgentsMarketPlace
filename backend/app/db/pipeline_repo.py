@@ -8,7 +8,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from app.db.database import PipelineTask, get_session
+from app.db.database import get_session
+from app.entities.pipeline import PipelineTask
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +18,11 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def create_pipeline_task(
-    task_id:      str,
-    task_prompt:  str,
-    mode:         str,
-    buyer_wallet: str = "",
-) -> None:
+def create_pipeline_task(task_id: str, task_prompt: str, mode: str) -> None:
     with get_session() as s:
         s.add(PipelineTask(
             id=task_id, task_prompt=task_prompt, mode=mode,
-            status="planning", buyer_wallet=buyer_wallet, created_at=_now(),
+            status="planning", created_at=_now(),
         ))
         s.commit()
 
@@ -71,10 +67,13 @@ def reset_stale_pipeline_tasks() -> int:
         return count
 
 
-def list_pipeline_tasks(buyer_wallet: str | None = None, limit: int = 50) -> list[dict]:
+def list_pipeline_tasks(limit: int = 50) -> list[dict]:
+    """Return recent pipeline tasks. buyer_wallet est on-chain — filtrer via verify_access()."""
     with get_session() as s:
-        q = s.query(PipelineTask).order_by(PipelineTask.created_at.desc())
-        if buyer_wallet:
-            q = q.filter(PipelineTask.buyer_wallet == buyer_wallet)
-        rows = q.limit(limit).all()
+        rows = (
+            s.query(PipelineTask)
+            .order_by(PipelineTask.created_at.desc())
+            .limit(limit)
+            .all()
+        )
         return [{c.name: getattr(r, c.name) for c in PipelineTask.__table__.columns} for r in rows]

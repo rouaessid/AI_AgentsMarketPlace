@@ -1,21 +1,22 @@
 import {
   ScoreRecorded as ScoreRecordedEvent,
-  AgentScoreUpdated as AgentScoreUpdatedEvent,
   JudgeScoreUpdated as JudgeScoreUpdatedEvent,
   ValidationRequest as ValidationRequestEvent,
   ValidationResponse as ValidationResponseEvent,
+  HoneypotPassed as HoneypotPassedEvent,
+  HoneypotFailed as HoneypotFailedEvent,
 } from "../generated/ValidationRegistry/ValidationRegistry"
 import {
   ValidationEvent,
-  AgentScore,
   JudgeScore,
   ValidationRequestEvent as ValidationRequestEntity,
   ValidationResponseEvent as ValidationResponseEntity,
-  AgentHashLookup,
+  JudgeHoneypotStats,
+  HoneypotResultEvent,
 } from "../generated/schema"
+import { BigInt } from "@graphprotocol/graph-ts"
 
 export function handleScoreRecorded(event: ScoreRecordedEvent): void {
-  // agentId and taskId are non-indexed strings — directly accessible
   let entity = new ValidationEvent(
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
@@ -29,23 +30,7 @@ export function handleScoreRecorded(event: ScoreRecordedEvent): void {
   entity.save()
 }
 
-export function handleAgentScoreUpdated(event: AgentScoreUpdatedEvent): void {
-  // agentId is an indexed string — we receive the keccak256 hash, resolve via lookup
-  let lookup = AgentHashLookup.load(event.params.agentId)
-  let agentId = lookup != null ? lookup.agentId : event.params.agentId.toHexString()
-
-  let score = AgentScore.load(agentId)
-  if (score == null) score = new AgentScore(agentId)
-  score.averageScore = event.params.averageScore
-  score.totalTasks = event.params.totalTasks
-  score.blockNumber = event.block.number
-  score.blockTimestamp = event.block.timestamp
-  score.transactionHash = event.transaction.hash
-  score.save()
-}
-
 export function handleJudgeScoreUpdated(event: JudgeScoreUpdatedEvent): void {
-  // judgeWallet is an indexed address — value type, always recoverable
   let score = JudgeScore.load(event.params.judgeWallet)
   if (score == null) score = new JudgeScore(event.params.judgeWallet)
   score.agreementRate = event.params.agreementRate
@@ -68,6 +53,68 @@ export function handleValidationRequest(event: ValidationRequestEvent): void {
   entity.blockTimestamp = event.block.timestamp
   entity.transactionHash = event.transaction.hash
   entity.save()
+}
+
+export function handleHoneypotPassed(event: HoneypotPassedEvent): void {
+  let judgeId = event.params.judgeId
+
+  let stats = JudgeHoneypotStats.load(judgeId)
+  if (stats == null) {
+    stats = new JudgeHoneypotStats(judgeId)
+    stats.authorized    = false
+    stats.totalPasses   = BigInt.fromI32(0)
+    stats.totalFails    = BigInt.fromI32(0)
+    stats.lastResultCID = ""
+  }
+  stats.authorized    = true
+  stats.totalPasses   = stats.totalPasses.plus(BigInt.fromI32(1))
+  stats.lastResultCID = event.params.resultCID
+  stats.blockNumber   = event.block.number
+  stats.blockTimestamp = event.block.timestamp
+  stats.transactionHash = event.transaction.hash
+  stats.save()
+
+  let result = new HoneypotResultEvent(
+    event.transaction.hash.concatI32(event.logIndex.toI32())
+  )
+  result.judgeId    = judgeId
+  result.passed     = true
+  result.resultCID  = event.params.resultCID
+  result.blockNumber = event.block.number
+  result.blockTimestamp = event.block.timestamp
+  result.transactionHash = event.transaction.hash
+  result.save()
+}
+
+export function handleHoneypotFailed(event: HoneypotFailedEvent): void {
+  let judgeId = event.params.judgeId
+
+  let stats = JudgeHoneypotStats.load(judgeId)
+  if (stats == null) {
+    stats = new JudgeHoneypotStats(judgeId)
+    stats.authorized    = false
+    stats.totalPasses   = BigInt.fromI32(0)
+    stats.totalFails    = BigInt.fromI32(0)
+    stats.lastResultCID = ""
+  }
+  stats.authorized    = false
+  stats.totalFails    = stats.totalFails.plus(BigInt.fromI32(1))
+  stats.lastResultCID = event.params.resultCID
+  stats.blockNumber   = event.block.number
+  stats.blockTimestamp = event.block.timestamp
+  stats.transactionHash = event.transaction.hash
+  stats.save()
+
+  let result = new HoneypotResultEvent(
+    event.transaction.hash.concatI32(event.logIndex.toI32())
+  )
+  result.judgeId    = judgeId
+  result.passed     = false
+  result.resultCID  = event.params.resultCID
+  result.blockNumber = event.block.number
+  result.blockTimestamp = event.block.timestamp
+  result.transactionHash = event.transaction.hash
+  result.save()
 }
 
 export function handleValidationResponse(event: ValidationResponseEvent): void {

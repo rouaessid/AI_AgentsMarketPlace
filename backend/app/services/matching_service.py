@@ -1,4 +1,4 @@
-"""
+﻿"""
 matching_service.py — Matching sémantique SubTask → Agent.
 
 Algorithme :
@@ -19,14 +19,15 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from dataclasses import dataclass
 from os import environ
 from typing import Optional
 
 import numpy as np
 
-from app.db.database import AgentEmbedding, get_session
-from app.services.planner_service import SubTask
+from app.repo.database import get_session
+from app.entities.agent import AgentEmbedding
+from app.schemas.pipeline import SubTask
+from app.schemas.matching import AgentMatch
 
 logger = logging.getLogger(__name__)
 
@@ -185,17 +186,6 @@ def _load_agents_with_embeddings() -> list[dict]:
                 meta = {}
             agents.append({"agent_id": row.agent_id, "embedding": emb, "metadata": meta})
         return agents
-
-
-# ── Dataclass résultat matching ───────────────────────────────────────────────
-
-@dataclass
-class AgentMatch:
-    subtask_id:     str
-    agent_id:       str
-    cosine_score:   float
-    trust_score:    float
-    final_score:    float
 
 
 # ── Matching principal ────────────────────────────────────────────────────────

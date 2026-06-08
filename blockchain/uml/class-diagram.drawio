@@ -1,0 +1,598 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2800" pageHeight="2000" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="IdentityRegistry" value="«contract»\nIdentityRegistry" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="20" width="340" height="336" />
+    </mxCell>
+    <mxCell id="11" value="+agentRegistry : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="64" width="340" height="22" />
+    </mxCell>
+    <mxCell id="12" value="-_nextTokenId : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="86" width="340" height="22" />
+    </mxCell>
+    <mxCell id="13" value="-_metadata : Map&lt;uint256, Map&lt;string, bytes&gt;&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="108" width="340" height="22" />
+    </mxCell>
+    <mxCell id="14" value="" style="line;strokeColor=#d0d0d0;fillColor=none;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="130" width="340" height="2" />
+    </mxCell>
+    <mxCell id="15" value="+register(agentId, agentType, agentURI, version, pricePerTask) : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="152" width="340" height="22" />
+    </mxCell>
+    <mxCell id="16" value="+mintNewVersion(agentId, newURI, newVersion) : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="174" width="340" height="22" />
+    </mxCell>
+    <mxCell id="17" value="+setAgentStatus(agentId, newStatus : AgentStatus)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="196" width="340" height="22" />
+    </mxCell>
+    <mxCell id="18" value="+setAgentWallet(agentId, newWallet, deadline, signature)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="218" width="340" height="22" />
+    </mxCell>
+    <mxCell id="19" value="+setPricePerTask(agentId, newPrice)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="240" width="340" height="22" />
+    </mxCell>
+    <mxCell id="20" value="+setMetadata(tokenId, key, value)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="262" width="340" height="22" />
+    </mxCell>
+    <mxCell id="21" value="+getAgent(agentId) : AgentIdentity" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="284" width="340" height="22" />
+    </mxCell>
+    <mxCell id="22" value="+isActive(agentId) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="306" width="340" height="22" />
+    </mxCell>
+    <mxCell id="23" value="+agentIdExists(agentId) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="328" width="340" height="22" />
+    </mxCell>
+    <mxCell id="ReputationRegistry" value="«contract»\nReputationRegistry" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="20" width="340" height="314" />
+    </mxCell>
+    <mxCell id="24" value="+authorizedCallers : Map&lt;address, bool&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="64" width="340" height="22" />
+    </mxCell>
+    <mxCell id="25" value="-_lastIndex : Map&lt;uint256, Map&lt;address, uint64&gt;&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="86" width="340" height="22" />
+    </mxCell>
+    <mxCell id="26" value="-_clients : Map&lt;uint256, address[]&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="108" width="340" height="22" />
+    </mxCell>
+    <mxCell id="27" value="" style="line;strokeColor=#d0d0d0;fillColor=none;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="130" width="340" height="2" />
+    </mxCell>
+    <mxCell id="28" value="+initialize(identityRegistry_ : address)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="152" width="340" height="22" />
+    </mxCell>
+    <mxCell id="29" value="+setAuthorizedCaller(caller : address, authorized : bool)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="174" width="340" height="22" />
+    </mxCell>
+    <mxCell id="30" value="+giveFeedback(agentId, value, valueDecimals, tag1, tag2, ...)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="196" width="340" height="22" />
+    </mxCell>
+    <mxCell id="31" value="+recordFromValidation(agentId, taskId, score : uint8)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="218" width="340" height="22" />
+    </mxCell>
+    <mxCell id="32" value="+recordReputation(agentId, delta, isIncrease, reason)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="240" width="340" height="22" />
+    </mxCell>
+    <mxCell id="33" value="+revokeFeedback(agentId, feedbackIndex)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="262" width="340" height="22" />
+    </mxCell>
+    <mxCell id="34" value="+getSummary(agentId, clientAddresses[], ...) : (count, value, decimals)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="284" width="340" height="22" />
+    </mxCell>
+    <mxCell id="35" value="+readFeedback(agentId, clientAddress, feedbackIndex) : FeedbackData" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="306" width="340" height="22" />
+    </mxCell>
+    <mxCell id="EscrowManager" value="«contract»\nEscrowManager" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="20" width="340" height="380" />
+    </mxCell>
+    <mxCell id="36" value="+validationRegistry : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="64" width="340" height="22" />
+    </mxCell>
+    <mxCell id="37" value="+identityRegistry : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="86" width="340" height="22" />
+    </mxCell>
+    <mxCell id="38" value="+judgeFeePercentage : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="108" width="340" height="22" />
+    </mxCell>
+    <mxCell id="39" value="+taskFunds : Map&lt;string, uint256&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="130" width="340" height="22" />
+    </mxCell>
+    <mxCell id="40" value="+taskClients : Map&lt;string, address&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="152" width="340" height="22" />
+    </mxCell>
+    <mxCell id="41" value="+taskAgent : Map&lt;string, string&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="174" width="340" height="22" />
+    </mxCell>
+    <mxCell id="42" value="+isPipelineTask : Map&lt;string, bool&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="196" width="340" height="22" />
+    </mxCell>
+    <mxCell id="43" value="-_pipelineWallets : Map&lt;string, address[]&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="218" width="340" height="22" />
+    </mxCell>
+    <mxCell id="44" value="-_pipelineShares : Map&lt;string, uint256[]&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="240" width="340" height="22" />
+    </mxCell>
+    <mxCell id="45" value="" style="line;strokeColor=#d0d0d0;fillColor=none;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="262" width="340" height="2" />
+    </mxCell>
+    <mxCell id="46" value="+depositPayment(taskId, agentId) &lt;&lt;payable&gt;&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="284" width="340" height="22" />
+    </mxCell>
+    <mxCell id="47" value="+depositPaymentPipeline(taskId, agentIds[], wallets[], shares_bps[]) &lt;&lt;payable&gt;&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="306" width="340" height="22" />
+    </mxCell>
+    <mxCell id="48" value="+releaseFunds(taskId, provider, consensusJudges[])" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="328" width="340" height="22" />
+    </mxCell>
+    <mxCell id="49" value="+releaseFundsPipeline(taskId, consensusJudges[])" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="350" width="340" height="22" />
+    </mxCell>
+    <mxCell id="50" value="+refundClient(taskId)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="372" width="340" height="22" />
+    </mxCell>
+    <mxCell id="StakingContract" value="«contract»\nStakingContract" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="820" width="340" height="314" />
+    </mxCell>
+    <mxCell id="51" value="+validationRegistry : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="864" width="340" height="22" />
+    </mxCell>
+    <mxCell id="52" value="+platformWallet : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="886" width="340" height="22" />
+    </mxCell>
+    <mxCell id="53" value="" style="line;strokeColor=#d0d0d0;fillColor=none;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="908" width="340" height="2" />
+    </mxCell>
+    <mxCell id="54" value="+stake() &lt;&lt;payable&gt;&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="930" width="340" height="22" />
+    </mxCell>
+    <mxCell id="55" value="+withdraw()" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="952" width="340" height="22" />
+    </mxCell>
+    <mxCell id="56" value="+lockStake(agent, duration)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="974" width="340" height="22" />
+    </mxCell>
+    <mxCell id="57" value="+unlockStake(agent)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="996" width="340" height="22" />
+    </mxCell>
+    <mxCell id="58" value="+slashProvider(agent) : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="1018" width="340" height="22" />
+    </mxCell>
+    <mxCell id="59" value="+slashJudge(agent) : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="1040" width="340" height="22" />
+    </mxCell>
+    <mxCell id="60" value="+isEligibleProvider(agent) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="1062" width="340" height="22" />
+    </mxCell>
+    <mxCell id="61" value="+isEligibleJudge(agent) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="1084" width="340" height="22" />
+    </mxCell>
+    <mxCell id="62" value="+isLocked(agent) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="1106" width="340" height="22" />
+    </mxCell>
+    <mxCell id="ValidationRegistry" value="«contract»\nValidationRegistry" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="20" width="340" height="534" />
+    </mxCell>
+    <mxCell id="63" value="+_agentTotalScore : Map&lt;string, uint256&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="64" width="340" height="22" />
+    </mxCell>
+    <mxCell id="64" value="+_agentScoreCount : Map&lt;string, uint256&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="86" width="340" height="22" />
+    </mxCell>
+    <mxCell id="65" value="+judgeAgreements : Map&lt;address, uint256&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="108" width="340" height="22" />
+    </mxCell>
+    <mxCell id="66" value="+judgeTotalVotes : Map&lt;address, uint256&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="130" width="340" height="22" />
+    </mxCell>
+    <mxCell id="67" value="+judgeOnboarded : Map&lt;string, bool&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="152" width="340" height="22" />
+    </mxCell>
+    <mxCell id="68" value="+judgeFlagged : Map&lt;string, bool&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="174" width="340" height="22" />
+    </mxCell>
+    <mxCell id="69" value="+judgeHoneypotFails : Map&lt;string, uint256&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="196" width="340" height="22" />
+    </mxCell>
+    <mxCell id="70" value="-_agentValidations : Map&lt;uint256, bytes32[]&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="218" width="340" height="22" />
+    </mxCell>
+    <mxCell id="71" value="-_validatorRequests : Map&lt;address, bytes32[]&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="240" width="340" height="22" />
+    </mxCell>
+    <mxCell id="72" value="" style="line;strokeColor=#d0d0d0;fillColor=none;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="262" width="340" height="2" />
+    </mxCell>
+    <mxCell id="73" value="+validationRequest(taskId, providerAgentId, requestURI, requestHash, traceHash, mode)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="284" width="340" height="22" />
+    </mxCell>
+    <mxCell id="74" value="+assignJudges(taskId, candidates[])" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="306" width="340" height="22" />
+    </mxCell>
+    <mxCell id="75" value="+commitVote(taskId, judgeId, commitHash)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="328" width="340" height="22" />
+    </mxCell>
+    <mxCell id="76" value="+revealVote(taskId, judgeId, vote, salt, taskCompletion, outputQuality, noFabrication, toolUsage)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="350" width="340" height="22" />
+    </mxCell>
+    <mxCell id="77" value="+finaliseValidation(taskId, justificationURI)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="372" width="340" height="22" />
+    </mxCell>
+    <mxCell id="78" value="+expireTask(taskId)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="394" width="340" height="22" />
+    </mxCell>
+    <mxCell id="79" value="+recordHoneypotResult(judgeId, passed, resultCID)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="416" width="340" height="22" />
+    </mxCell>
+    <mxCell id="80" value="+setJudgeOnboarded(judgeId)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="438" width="340" height="22" />
+    </mxCell>
+    <mxCell id="81" value="+isJudgeAuthorized(judgeId) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="460" width="340" height="22" />
+    </mxCell>
+    <mxCell id="82" value="+getTask(taskId) : ValidationTask" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="482" width="340" height="22" />
+    </mxCell>
+    <mxCell id="83" value="+getAgentScore(agentId) : (avgScore, totalTasks)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="504" width="340" height="22" />
+    </mxCell>
+    <mxCell id="84" value="+getValidationStatus(requestHash) : ValidationRecord" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="526" width="340" height="22" />
+    </mxCell>
+    <mxCell id="IIdentityRegistry" value="«interface»\nIIdentityRegistry" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="480" width="340" height="204" />
+    </mxCell>
+    <mxCell id="85" value="+isActive(agentId : string) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="524" width="340" height="22" />
+    </mxCell>
+    <mxCell id="86" value="+agentIdExists(agentId : string) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="546" width="340" height="22" />
+    </mxCell>
+    <mxCell id="87" value="+getAgentWallet(agentId : string) : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="568" width="340" height="22" />
+    </mxCell>
+    <mxCell id="88" value="+getAgentType(agentId : string) : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="590" width="340" height="22" />
+    </mxCell>
+    <mxCell id="89" value="+getCurrentTokenId(agentId : string) : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="612" width="340" height="22" />
+    </mxCell>
+    <mxCell id="90" value="+getPricePerTask(agentId : string) : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="634" width="340" height="22" />
+    </mxCell>
+    <mxCell id="91" value="+ownerOf(tokenId : uint256) : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="656" width="340" height="22" />
+    </mxCell>
+    <mxCell id="IStakingContract" value="«interface»\nIStakingContract" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="480" width="340" height="204" />
+    </mxCell>
+    <mxCell id="92" value="+isEligibleProvider(agent : address) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="524" width="340" height="22" />
+    </mxCell>
+    <mxCell id="93" value="+isEligibleJudge(agent : address) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="546" width="340" height="22" />
+    </mxCell>
+    <mxCell id="94" value="+isLocked(agent : address) : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="568" width="340" height="22" />
+    </mxCell>
+    <mxCell id="95" value="+lockStake(agent : address, duration : uint256)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="590" width="340" height="22" />
+    </mxCell>
+    <mxCell id="96" value="+unlockStake(agent : address)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="612" width="340" height="22" />
+    </mxCell>
+    <mxCell id="97" value="+slashProvider(agent : address) : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="634" width="340" height="22" />
+    </mxCell>
+    <mxCell id="98" value="+slashJudge(agent : address) : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="980" y="656" width="340" height="22" />
+    </mxCell>
+    <mxCell id="IReputationRegistry" value="«interface»\nIReputationRegistry" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="480" width="340" height="94" />
+    </mxCell>
+    <mxCell id="99" value="+recordFromValidation(agentId : string, taskId : string, score : uint8)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="524" width="340" height="22" />
+    </mxCell>
+    <mxCell id="100" value="+recordReputation(agentId : string, delta : uint256, isIncrease : bool, reason : string)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="546" width="340" height="22" />
+    </mxCell>
+    <mxCell id="IEscrowManager" value="«interface»\nIEscrowManager" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="480" width="340" height="116" />
+    </mxCell>
+    <mxCell id="101" value="+releaseFunds(taskId : string, provider : address, judges : address[])" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="524" width="340" height="22" />
+    </mxCell>
+    <mxCell id="102" value="+releaseFundsPipeline(taskId : string, judges : address[])" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="546" width="340" height="22" />
+    </mxCell>
+    <mxCell id="103" value="+refundClient(taskId : string)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="568" width="340" height="22" />
+    </mxCell>
+    <mxCell id="AgentIdentity" value="«struct»\nAgentIdentity" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="600" width="340" height="204" />
+    </mxCell>
+    <mxCell id="104" value="+agentId : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="644" width="340" height="22" />
+    </mxCell>
+    <mxCell id="105" value="+owner : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="666" width="340" height="22" />
+    </mxCell>
+    <mxCell id="106" value="+agentWallet : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="688" width="340" height="22" />
+    </mxCell>
+    <mxCell id="107" value="+createdAt : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="710" width="340" height="22" />
+    </mxCell>
+    <mxCell id="108" value="+currentTokenId : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="732" width="340" height="22" />
+    </mxCell>
+    <mxCell id="109" value="+tokenHistory : uint256[]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="754" width="340" height="22" />
+    </mxCell>
+    <mxCell id="110" value="+pricePerTask : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="776" width="340" height="22" />
+    </mxCell>
+    <mxCell id="AgentVersion" value="«struct»\nAgentVersion" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="970" width="340" height="160" />
+    </mxCell>
+    <mxCell id="111" value="+tokenId : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="1014" width="340" height="22" />
+    </mxCell>
+    <mxCell id="112" value="+agentURI : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="1036" width="340" height="22" />
+    </mxCell>
+    <mxCell id="113" value="+version : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="1058" width="340" height="22" />
+    </mxCell>
+    <mxCell id="114" value="+mintedAt : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="1080" width="340" height="22" />
+    </mxCell>
+    <mxCell id="115" value="+isCurrent : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="1102" width="340" height="22" />
+    </mxCell>
+    <mxCell id="FeedbackData" value="«struct»\nFeedbackData" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="280" y="700" width="340" height="160" />
+    </mxCell>
+    <mxCell id="116" value="+value : int128" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="280" y="744" width="340" height="22" />
+    </mxCell>
+    <mxCell id="117" value="+valueDecimals : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="280" y="766" width="340" height="22" />
+    </mxCell>
+    <mxCell id="118" value="+tag1 : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="280" y="788" width="340" height="22" />
+    </mxCell>
+    <mxCell id="119" value="+tag2 : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="280" y="810" width="340" height="22" />
+    </mxCell>
+    <mxCell id="120" value="+isRevoked : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="280" y="832" width="340" height="22" />
+    </mxCell>
+    <mxCell id="StakeInfo" value="«struct»\nStakeInfo" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="760" y="820" width="340" height="116" />
+    </mxCell>
+    <mxCell id="121" value="+amount : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="760" y="864" width="340" height="22" />
+    </mxCell>
+    <mxCell id="122" value="+lockedUntil : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="760" y="886" width="340" height="22" />
+    </mxCell>
+    <mxCell id="123" value="+exists : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="760" y="908" width="340" height="22" />
+    </mxCell>
+    <mxCell id="JudgeCommit" value="«struct»\nJudgeCommit" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="700" width="340" height="204" />
+    </mxCell>
+    <mxCell id="124" value="+commitHash : bytes32" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="744" width="340" height="22" />
+    </mxCell>
+    <mxCell id="125" value="+taskCompletion : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="766" width="340" height="22" />
+    </mxCell>
+    <mxCell id="126" value="+outputQuality : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="788" width="340" height="22" />
+    </mxCell>
+    <mxCell id="127" value="+noFabrication : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="810" width="340" height="22" />
+    </mxCell>
+    <mxCell id="128" value="+toolUsage : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="832" width="340" height="22" />
+    </mxCell>
+    <mxCell id="129" value="+committed : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="854" width="340" height="22" />
+    </mxCell>
+    <mxCell id="130" value="+revealed : bool" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="876" width="340" height="22" />
+    </mxCell>
+    <mxCell id="ValidationTask" value="«struct»\nValidationTask" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="700" width="340" height="380" />
+    </mxCell>
+    <mxCell id="131" value="+taskId : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="744" width="340" height="22" />
+    </mxCell>
+    <mxCell id="132" value="+providerAgentId : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="766" width="340" height="22" />
+    </mxCell>
+    <mxCell id="133" value="+providerWallet : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="788" width="340" height="22" />
+    </mxCell>
+    <mxCell id="134" value="+requestHash : bytes32" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="810" width="340" height="22" />
+    </mxCell>
+    <mxCell id="135" value="+traceHash : bytes32" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="832" width="340" height="22" />
+    </mxCell>
+    <mxCell id="136" value="+erc8004AgentId : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="854" width="340" height="22" />
+    </mxCell>
+    <mxCell id="137" value="+createdAt : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="876" width="340" height="22" />
+    </mxCell>
+    <mxCell id="138" value="+commitDeadline : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="898" width="340" height="22" />
+    </mxCell>
+    <mxCell id="139" value="+revealDeadline : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="920" width="340" height="22" />
+    </mxCell>
+    <mxCell id="140" value="+judgeIds : string[3]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="942" width="340" height="22" />
+    </mxCell>
+    <mxCell id="141" value="+judgeWallets : address[3]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="964" width="340" height="22" />
+    </mxCell>
+    <mxCell id="142" value="+finalResponse : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="986" width="340" height="22" />
+    </mxCell>
+    <mxCell id="143" value="+finalTag : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1008" width="340" height="22" />
+    </mxCell>
+    <mxCell id="144" value="+score : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1030" width="340" height="22" />
+    </mxCell>
+    <mxCell id="145" value="+mode : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1052" width="340" height="22" />
+    </mxCell>
+    <mxCell id="ValidationRecord" value="«struct»\nValidationRecord" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1940" y="700" width="340" height="204" />
+    </mxCell>
+    <mxCell id="146" value="+validatorAddress : address" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1940" y="744" width="340" height="22" />
+    </mxCell>
+    <mxCell id="147" value="+agentId : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1940" y="766" width="340" height="22" />
+    </mxCell>
+    <mxCell id="148" value="+response : uint8" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1940" y="788" width="340" height="22" />
+    </mxCell>
+    <mxCell id="149" value="+responseHash : bytes32" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1940" y="810" width="340" height="22" />
+    </mxCell>
+    <mxCell id="150" value="+tag : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1940" y="832" width="340" height="22" />
+    </mxCell>
+    <mxCell id="151" value="+responseURI : string" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1940" y="854" width="340" height="22" />
+    </mxCell>
+    <mxCell id="152" value="+lastUpdate : uint256" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1940" y="876" width="340" height="22" />
+    </mxCell>
+    <mxCell id="AgentType" value="«enumeration»\nAgentType" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="1200" width="340" height="94" />
+    </mxCell>
+    <mxCell id="153" value="PROVIDER" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="1244" width="340" height="22" />
+    </mxCell>
+    <mxCell id="154" value="JUDGE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="20" y="1266" width="340" height="22" />
+    </mxCell>
+    <mxCell id="AgentStatus" value="«enumeration»\nAgentStatus" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="220" y="1200" width="340" height="116" />
+    </mxCell>
+    <mxCell id="155" value="ACTIVE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="220" y="1244" width="340" height="22" />
+    </mxCell>
+    <mxCell id="156" value="SUSPENDED" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="220" y="1266" width="340" height="22" />
+    </mxCell>
+    <mxCell id="157" value="REVOKED" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="220" y="1288" width="340" height="22" />
+    </mxCell>
+    <mxCell id="TaskStatus" value="«enumeration»\nTaskStatus" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1000" width="340" height="160" />
+    </mxCell>
+    <mxCell id="158" value="PENDING" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1044" width="340" height="22" />
+    </mxCell>
+    <mxCell id="159" value="COMMITTING" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1066" width="340" height="22" />
+    </mxCell>
+    <mxCell id="160" value="REVEALING" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1088" width="340" height="22" />
+    </mxCell>
+    <mxCell id="161" value="FINALISED" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1110" width="340" height="22" />
+    </mxCell>
+    <mxCell id="162" value="EXPIRED" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1700" y="1132" width="340" height="22" />
+    </mxCell>
+    <mxCell id="InternalVote" value="«enumeration»\nInternalVote" style="swimlane;fontStyle=1;align=center;startSize=40;arcSize=0;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="1000" width="340" height="116" />
+    </mxCell>
+    <mxCell id="163" value="NONE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="1044" width="340" height="22" />
+    </mxCell>
+    <mxCell id="164" value="VALID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="1066" width="340" height="22" />
+    </mxCell>
+    <mxCell id="165" value="INVALID" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=4;overflow=hidden;fillColor=#ffffff;strokeColor=#d0d0d0;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="1460" y="1088" width="340" height="22" />
+    </mxCell>
+    <mxCell id="166" value="" style="endArrow=block;endFill=0;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="IdentityRegistry" target="IIdentityRegistry" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="167" value="" style="endArrow=block;endFill=0;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="StakingContract" target="IStakingContract" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="168" value="" style="endArrow=block;endFill=0;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="ReputationRegistry" target="IReputationRegistry" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="169" value="" style="endArrow=block;endFill=0;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="EscrowManager" target="IEscrowManager" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="170" value="uses" style="endArrow=open;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="ValidationRegistry" target="IIdentityRegistry" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="171" value="uses" style="endArrow=open;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="ValidationRegistry" target="IStakingContract" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="172" value="uses" style="endArrow=open;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="ValidationRegistry" target="IReputationRegistry" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="173" value="uses" style="endArrow=open;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="ValidationRegistry" target="IEscrowManager" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="174" value="uses" style="endArrow=open;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="ReputationRegistry" target="IIdentityRegistry" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="175" value="uses" style="endArrow=open;dashed=1;edgeStyle=orthogonalEdgeStyle;" edge="1" source="EscrowManager" target="IIdentityRegistry" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="176" value="0..*" style="endArrow=ERmany;startArrow=ERmandOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=1;endFill=0;" edge="1" source="IdentityRegistry" target="AgentVersion" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="177" value="0..*" style="endArrow=ERmany;startArrow=ERmandOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=1;endFill=0;" edge="1" source="IdentityRegistry" target="AgentIdentity" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="178" value="0..*" style="endArrow=ERmany;startArrow=ERmandOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=1;endFill=0;" edge="1" source="ReputationRegistry" target="FeedbackData" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="179" value="0..*" style="endArrow=ERmany;startArrow=ERmandOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=1;endFill=0;" edge="1" source="StakingContract" target="StakeInfo" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="180" value="0..*" style="endArrow=ERmany;startArrow=ERmandOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=1;endFill=0;" edge="1" source="ValidationRegistry" target="JudgeCommit" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="181" value="0..*" style="endArrow=ERmany;startArrow=ERmandOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=1;endFill=0;" edge="1" source="ValidationRegistry" target="ValidationTask" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="182" value="0..*" style="endArrow=ERmany;startArrow=ERmandOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=1;endFill=0;" edge="1" source="ValidationRegistry" target="ValidationRecord" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="183" value="agentType" style="endArrow=open;startArrow=ERmanyToOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=0;" edge="1" source="AgentIdentity" target="AgentType" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="184" value="status" style="endArrow=open;startArrow=ERmanyToOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=0;" edge="1" source="AgentIdentity" target="AgentStatus" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="185" value="vote" style="endArrow=open;startArrow=ERmanyToOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=0;" edge="1" source="JudgeCommit" target="InternalVote" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="186" value="status" style="endArrow=open;startArrow=ERmanyToOne;dashed=0;edgeStyle=orthogonalEdgeStyle;startFill=0;" edge="1" source="ValidationTask" target="TaskStatus" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="187" value="&lt;b&gt;Héritage OpenZeppelin&lt;/b&gt;&lt;br/&gt;IdentityRegistry → ERC721URIStorage, Ownable, EIP712&lt;br/&gt;ReputationRegistry → Ownable&lt;br/&gt;EscrowManager → Ownable, ReentrancyGuard&lt;br/&gt;StakingContract → Ownable, ReentrancyGuard&lt;br/&gt;ValidationRegistry → Ownable, ReentrancyGuard" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;fontSize=11;fillColor=#fff9c4;strokeColor=#d6b656;" vertex="1" edge="0" parent="1">
+      <mxGeometry as="geometry" x="500" y="1200" width="400" height="120" />
+    </mxCell>
+  </root>
+</mxGraphModel>

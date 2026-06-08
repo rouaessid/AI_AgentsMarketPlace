@@ -150,35 +150,42 @@ export default function RegisterAgent() {
       // Step 3 — Wait for on-chain confirmation before notifying backend
       await waitForTxReceipt(txHash)
 
-      // Step 4 — Notify backend of confirmed tx
-      await agentApi.confirm({ registration_id: res.registration_id, tx_hash: txHash })
-
-      // Step 5 — Poll /status until The Graph indexes AgentCreated
-      setStep(4.5)
-      const agentId = res.agent_id
-      let confirmed = false
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 4000))
-        try {
-          const s = await agentApi.status(agentId)
-          if (s.confirmed) { confirmed = true; break }
-        } catch (_) {}
+      // Step 3b — Stake AVANT le confirm (requis avant honeypot pour les juges)
+      let stakeTxHash = null
+      if (res.stake_contract && res.stake_amount_eth > 0) {
+        setStep(3.5)
+        const stakeWei = '0x' + BigInt(Math.round(res.stake_amount_eth * 1e18)).toString(16)
+        stakeTxHash = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from:  walletAddress,
+            to:    res.stake_contract,
+            data:  '0x3a4b66f1',   // stake()
+            value: stakeWei,
+            gas:   '0x30D40',      // 200 000
+          }],
+        })
+        await waitForTxReceipt(stakeTxHash)
       }
 
-      setResponse({ ...res, tx_hash: txHash, confirmed })
-      setStep(5)
+      // Step 4 — Notify backend of confirmed tx (honeypot onboarding ~25s for judges)
+      await agentApi.confirm({ registration_id: res.registration_id, tx_hash: txHash })
+
+      // Redirect immediately — SellerDashboard polls status in background
+      setResponse({ ...res, tx_hash: txHash, stake_tx_hash: stakeTxHash })
+      navigate('/seller/dashboard', { state: { newAgent: res.agent_id } })
     } catch (e) {
       setApiError(e.message || 'Registration failed. Make sure the backend is running.')
     }
     setSubmitting(false)
   }
 
-  if (step === 4.5) return (
+  if (step === 3.5) return (
     <div className="min-h-screen bg-am-bg flex items-center justify-center">
       <div className="text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
-        <p className="text-lg font-medium text-gray-700">Waiting for The Graph to index AgentCreated...</p>
-        <p className="text-sm text-gray-400 mt-1">This usually takes 10–30 seconds</p>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4" />
+        <p className="text-lg font-medium text-gray-700">Waiting for stake transaction...</p>
+        <p className="text-sm text-gray-400 mt-1">Confirm the stake() transaction in MetaMask</p>
       </div>
     </div>
   )

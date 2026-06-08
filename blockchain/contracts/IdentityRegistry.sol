@@ -7,8 +7,17 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 
+// ════════════════════════════════════════════════════════════════════════════
+//  IdentityRegistry — AgentMarket
+//  Registre ERC-721 soulbound des agents (providers et judges).
+//  Chaque agent est identifié par un agentId string et un tokenId NFT.
+//  Transferts désactivés (soulbound). Versions gérées via mintNewVersion().
+// ════════════════════════════════════════════════════════════════════════════
+
 contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
     using ECDSA for bytes32;
+
+    // ── Type Declarations ─────────────────────────────────────────────────────
 
     enum AgentType   { PROVIDER, JUDGE }
     enum AgentStatus { ACTIVE, SUSPENDED, REVOKED }
@@ -30,22 +39,33 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         uint256     createdAt;
         uint256     currentTokenId;
         uint256[]   tokenHistory;
-        uint256     pricePerTask;   // in wei — set at registration, verified by EscrowManager
+        uint256     pricePerTask;  // en wei — vérifié par EscrowManager
     }
+
+    // ── Constants ─────────────────────────────────────────────────────────────
 
     bytes32 private constant _SET_WALLET_TYPEHASH = keccak256(
         "SetAgentWallet(uint256 tokenId,address newWallet,uint256 deadline)"
     );
 
+    // ── State Variables ───────────────────────────────────────────────────────
+
+    string public agentRegistry; // ERC-8004 registry identifier
+
     uint256 private _nextTokenId = 1;
 
+    // agentId string → identité complète
     mapping(string  => AgentIdentity)                    private _agents;
+    // tokenId → agentId string
     mapping(uint256 => string)                           private _tokenToAgentId;
+    // tokenId → version metadata
     mapping(uint256 => AgentVersion)                     private _versions;
+    // agentId → existence flag
     mapping(string  => bool)                             private _agentIdExists;
+    // tokenId → key → valeur metadata arbitraire
     mapping(uint256 => mapping(string => bytes))         private _metadata;
 
-    string public agentRegistry;
+    // ── Events ────────────────────────────────────────────────────────────────
 
     event AgentCreated(
         string  agentId,
@@ -77,6 +97,8 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         AgentStatus newStatus
     );
 
+    // ── Errors ────────────────────────────────────────────────────────────────
+
     error AgentIdNotFound(string agentId);
     error AgentIdAlreadyExists(string agentId);
     error AgentIdInvalid();
@@ -88,6 +110,8 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
     error SignatureExpired(uint256 deadline, uint256 blockTimestamp);
     error InvalidWallet();
     error AgentNotActive(string agentId);
+
+    // ── Modifiers ─────────────────────────────────────────────────────────────
 
     modifier agentExists(string memory agentId) {
         if (!_agentIdExists[agentId]) revert AgentIdNotFound(agentId);
@@ -120,6 +144,8 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         _;
     }
 
+    // ── Constructor ───────────────────────────────────────────────────────────
+
     constructor()
         ERC721("AgentMarket Identity", "AMID")
         Ownable(msg.sender)
@@ -131,14 +157,22 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         ));
     }
 
-    // ─── Register ────────────────────────────────────────────────────────────
+    // ── External — Registration ───────────────────────────────────────────────
 
+    /**
+     * @notice Enregistre un nouvel agent et mint son NFT soulbound.
+     * @param agentId_      Identifiant unique (alphanumérique, max 64 chars)
+     * @param agentType_    PROVIDER ou JUDGE
+     * @param agentURI_     URI IPFS du manifest (ipfs://Qm...)
+     * @param version_      Version sémantique (ex: "1.0.0")
+     * @param pricePerTask_ Prix par tâche en wei
+     */
     function register(
         string    calldata agentId_,
         AgentType agentType_,
         string    calldata agentURI_,
         string    calldata version_,
-        uint256   pricePerTask_       // in wei, e.g. 0.05 ETH = 50000000000000000
+        uint256   pricePerTask_
     )
         external
         validAgentId(agentId_)
@@ -173,15 +207,19 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
             pricePerTask:   pricePerTask_
         });
 
-        _agentIdExists[agentId_] = true;
-        _tokenToAgentId[tokenId] = agentId_;
+        _agentIdExists[agentId_]  = true;
+        _tokenToAgentId[tokenId]  = agentId_;
 
         emit MetadataSet(tokenId, "agentWallet", "agentWallet", abi.encode(msg.sender));
         emit AgentCreated(agentId_, tokenId, msg.sender, agentType_, agentURI_, version_);
     }
 
-    // ─── New version ──────────────────────────────────────────────────────────
+    // ── External — Versioning ─────────────────────────────────────────────────
 
+    /**
+     * @notice Mint une nouvelle version du token (nouvelle URI IPFS).
+     * @dev L'ancien token reste mais isCurrent passe à false.
+     */
     function mintNewVersion(
         string calldata agentId_,
         string calldata newURI_,
@@ -217,47 +255,20 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         emit AgentVersionMinted(agentId_, newTokenId, prevTokenId, newURI_, newVersion_);
     }
 
-    // ─── SOULBOUND ────────────────────────────────────────────────────────────
-    // OZ 5.x : ERC721URIStorage ne surcharge pas _update
-    // donc on n'utilise que override sans liste
+    // ── External — Admin ──────────────────────────────────────────────────────
 
-    function _update(
-        address to,
-        uint256 tokenId,
-        address auth
-    ) internal override returns (address) {
-        address from = _ownerOf(tokenId);
-        if (from != address(0) && to != address(0)) {
-            revert SoulboundTransferForbidden();
-        }
-        return super._update(to, tokenId, auth);
-    }
-
-    function approve(address, uint256)
-        public pure
-        override(ERC721, IERC721)
+    function setAgentStatus(string calldata agentId_, AgentStatus newStatus)
+        external onlyOwner agentExists(agentId_)
     {
-        revert SoulboundTransferForbidden();
+        AgentStatus old = _agents[agentId_].status;
+        _agents[agentId_].status = newStatus;
+        emit AgentStatusChanged(agentId_, old, newStatus);
     }
 
-    function setApprovalForAll(address, bool)
-        public pure
-        override(ERC721, IERC721)
-    {
-        revert SoulboundTransferForbidden();
-    }
-
-    // ─── Metadata ─────────────────────────────────────────────────────────────
-
-    function getMetadata(uint256 tokenId, string memory key)
-        external view returns (bytes memory)
-    {
-        if (!_exists(tokenId)) revert TokenNotFound(tokenId);
-        return _metadata[tokenId][key];
-    }
+    // ── External — Metadata ───────────────────────────────────────────────────
 
     function setMetadata(
-        uint256 tokenId,
+        uint256          tokenId,
         string  calldata key,
         bytes   calldata value
     ) external notReservedKey(key) {
@@ -268,12 +279,13 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         emit MetadataSet(tokenId, key, key, value);
     }
 
-    // ─── agentWallet ─────────────────────────────────────────────────────────
-
+    /**
+     * @notice Change le wallet opérationnel d'un agent (signature EIP-712 requise).
+     */
     function setAgentWallet(
         string  calldata agentId_,
-        address newWallet,
-        uint256 deadline,
+        address          newWallet,
+        uint256          deadline,
         bytes   calldata signature
     ) external agentExists(agentId_) onlyAgentOwner(agentId_) {
         if (newWallet == address(0)) revert InvalidWallet();
@@ -289,17 +301,13 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         emit MetadataSet(tokenId, "agentWallet", "agentWallet", abi.encode(newWallet));
     }
 
-    // ─── Status ──────────────────────────────────────────────────────────────
-
-    function setAgentStatus(string calldata agentId_, AgentStatus newStatus)
-        external onlyOwner agentExists(agentId_)
+    function setPricePerTask(string calldata agentId_, uint256 newPrice_)
+        external agentExists(agentId_) onlyAgentOwner(agentId_)
     {
-        AgentStatus old = _agents[agentId_].status;
-        _agents[agentId_].status = newStatus;
-        emit AgentStatusChanged(agentId_, old, newStatus);
+        _agents[agentId_].pricePerTask = newPrice_;
     }
 
-    // ─── Views ───────────────────────────────────────────────────────────────
+    // ── Views ─────────────────────────────────────────────────────────────────
 
     function getAgent(string calldata agentId_)
         external view agentExists(agentId_)
@@ -310,14 +318,12 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
 
     function getAgentType(string calldata agentId_)
         external view agentExists(agentId_)
-        returns (uint8)  // 0 = PROVIDER, 1 = JUDGE
+        returns (uint8)
     {
         return uint8(_agents[agentId_].agentType);
     }
 
-    function getVersion(uint256 tokenId)
-        external view returns (AgentVersion memory)
-    {
+    function getVersion(uint256 tokenId) external view returns (AgentVersion memory) {
         if (!_exists(tokenId)) revert TokenNotFound(tokenId);
         return _versions[tokenId];
     }
@@ -336,9 +342,7 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         return _agents[agentId_].tokenHistory;
     }
 
-    function getAgentIdByToken(uint256 tokenId)
-        external view returns (string memory)
-    {
+    function getAgentIdByToken(uint256 tokenId) external view returns (string memory) {
         if (!_exists(tokenId)) revert TokenNotFound(tokenId);
         return _tokenToAgentId[tokenId];
     }
@@ -350,9 +354,6 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         return _agents[agentId_].agentWallet;
     }
 
-    // ─── Price ───────────────────────────────────────────────────────────────
-
-    /// @notice Returns the price per task in wei for a given agent.
     function getPricePerTask(string calldata agentId_)
         external view agentExists(agentId_)
         returns (uint256)
@@ -360,11 +361,11 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         return _agents[agentId_].pricePerTask;
     }
 
-    /// @notice Agent owner can update their price.
-    function setPricePerTask(string calldata agentId_, uint256 newPrice_)
-        external agentExists(agentId_) onlyAgentOwner(agentId_)
+    function getMetadata(uint256 tokenId, string memory key)
+        external view returns (bytes memory)
     {
-        _agents[agentId_].pricePerTask = newPrice_;
+        if (!_exists(tokenId)) revert TokenNotFound(tokenId);
+        return _metadata[tokenId][key];
     }
 
     function isActive(string calldata agentId_) external view returns (bool) {
@@ -387,9 +388,24 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         return tokenURI(_agents[agentId_].currentTokenId);
     }
 
-    // ─── ERC-165 ─────────────────────────────────────────────────────────────
-    // OZ 5.x : ERC721URIStorage surcharge supportsInterface
-    // donc on liste uniquement ERC721URIStorage
+    // ── Soulbound — ERC-721 overrides ─────────────────────────────────────────
+
+    function _update(address to, uint256 tokenId, address auth)
+        internal override returns (address)
+    {
+        address from = _ownerOf(tokenId);
+        if (from != address(0) && to != address(0))
+            revert SoulboundTransferForbidden();
+        return super._update(to, tokenId, auth);
+    }
+
+    function approve(address, uint256) public pure override(ERC721, IERC721) {
+        revert SoulboundTransferForbidden();
+    }
+
+    function setApprovalForAll(address, bool) public pure override(ERC721, IERC721) {
+        revert SoulboundTransferForbidden();
+    }
 
     function supportsInterface(bytes4 interfaceId)
         public view override(ERC721URIStorage)
@@ -398,7 +414,7 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         return super.supportsInterface(interfaceId);
     }
 
-    // ─── Internals ───────────────────────────────────────────────────────────
+    // ── Internal Helpers ──────────────────────────────────────────────────────
 
     function _exists(uint256 tokenId) internal view returns (bool) {
         return _ownerOf(tokenId) != address(0);
@@ -406,21 +422,24 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
 
     function _uint2str(uint256 v) internal pure returns (string memory) {
         if (v == 0) return "0";
-        uint256 tmp = v; uint256 d;
-        while (tmp != 0) { d++; tmp /= 10; }
-        bytes memory buf = new bytes(d);
-        while (v != 0) { d--; buf[d] = bytes1(uint8(48 + v % 10)); v /= 10; }
-        return string(buf);
+        uint256 j = v;
+        uint256 len;
+        while (j != 0) { len++; j /= 10; }
+        bytes memory bstr = new bytes(len);
+        uint256 k = len;
+        while (v != 0) { k--; bstr[k] = bytes1(uint8(48 + v % 10)); v /= 10; }
+        return string(bstr);
     }
 
     function _addr2str(address a) internal pure returns (string memory) {
-        bytes memory b    = new bytes(42);
+        bytes memory b = abi.encodePacked(a);
         bytes memory hex_ = "0123456789abcdef";
-        b[0] = "0"; b[1] = "x";
+        bytes memory str = new bytes(42);
+        str[0] = "0"; str[1] = "x";
         for (uint256 i = 0; i < 20; i++) {
-            b[2 + i*2]     = hex_[uint8(bytes20(a)[i]) >> 4];
-            b[2 + i*2 + 1] = hex_[uint8(bytes20(a)[i]) & 0xf];
+            str[2 + i * 2]     = hex_[uint8(b[i]) >> 4];
+            str[3 + i * 2]     = hex_[uint8(b[i]) & 0x0f];
         }
-        return string(b);
+        return string(str);
     }
 }

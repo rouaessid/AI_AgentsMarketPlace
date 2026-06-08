@@ -212,6 +212,7 @@ export function normalizeAgent(a) {
 
   return {
     ...a,
+    agent_type: (a.agent_type === 1 || a.agent_type === 'judge') ? 'judge' : 'provider',
     description: a.description ?? reg.description ?? '',
     readme: a.readme ?? reg.readme ?? '',
     image_url: a.image_url ?? reg.image ?? null,
@@ -242,6 +243,7 @@ export function normalizeAgent(a) {
       last_active: caps.last_active ?? null,
       monthly_tasks: caps.monthly_tasks ?? [],
       weekly_success: caps.weekly_success ?? [],
+      total_validations: caps.total_validations ?? 0,
     },
     // Judge-specific fields — stored inside registration_file, not at AgentRecord root
     evaluation_skills:    a.evaluation_skills    ?? reg.evaluation_skills    ?? [],

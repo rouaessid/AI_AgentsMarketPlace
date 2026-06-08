@@ -37,7 +37,11 @@ class Settings(BaseSettings):
     # Feedback wallet — must NOT be the deployer (platform) wallet.
     # The deployer owns all agent tokens; giveFeedback() rejects the token owner.
     # Default = hardhat/Anvil account[1] (well-known, safe for local testing only).
-    feedback_wallet_key: str = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+    feedback_wallet_key_testnet: str = ""
+    # feedback_wallet_key : testnet prend priorité sur la valeur hardcodée Hardhat
+    @property
+    def feedback_wallet_key(self) -> str:
+        return self.feedback_wallet_key_testnet or "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 
     # Judge keys — dict wallet_address → private_key (source primaire)
     # Ex: JUDGE_WALLET_KEYS={"0x90F79...":"0x7c852...","0xAutre...":"0xClé..."}
@@ -70,6 +74,10 @@ class Settings(BaseSettings):
     gemini_api_key:        str = ""
     judge_delta_gemini_key: str = ""
 
+    # Mistral API keys — gamma + delta
+    judge_gamma_mistral_key: str = ""
+    judge_delta_mistral_key: str = ""
+
     # OpenRouter API keys — beta + gamma + epsilon
     judge_beta_or_key:     str = ""
     judge_gamma_or_key:    str = ""
@@ -95,7 +103,7 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = ["*"]
 
     # The Graph subgraph endpoint — used instead of blockchain_indexer
-    graph_url: str = "https://api.studio.thegraph.com/query/1753968/agentmarket/v0.2.0"
+    graph_url: str = "https://api.studio.thegraph.com/query/1753968/agentmarket/v5.1.0"
 
     @field_validator("debug", mode="before")
     @classmethod

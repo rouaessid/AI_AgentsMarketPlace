@@ -42,6 +42,16 @@ export default function SellerDashboard() {
 
   useEffect(() => { fetchMyAgents() }, [fetchMyAgents])
 
+  // Auto-poll every 4s only while agents are pending — stops automatically
+  useEffect(() => {
+    const hasPending = agents.some(a =>
+      a.status === 'pending_index' || a.status === 'pending_validation'
+    )
+    if (!hasPending) return
+    const id = setInterval(fetchMyAgents, 4000)
+    return () => clearInterval(id)
+  }, [agents, fetchMyAgents])
+
   function fmtEth(val) {
     const n = parseFloat(val) || 0
     if (n === 0)    return '0.00'
@@ -352,6 +362,8 @@ function NewVersionModal({ agent, onClose }) {
           params: [{ from, to: res.unsigned_tx.contract_address, data: res.unsigned_tx.data, gas: gasHex }],
         })
         setTxHash(txHash)
+
+        // Pour les juges — le test technique est déclenché automatiquement par le backend (new-version endpoint)
       } else {
         setTxHash(res.tx_hash || 'submitted')
       }
@@ -431,13 +443,13 @@ function NewVersionModal({ agent, onClose }) {
 }
 
 function AgentRow({ agent, index }) {
-  const [editAgent,  setEditAgent]  = useState(false)
-  const [newVersion, setNewVersion] = useState(false)
-  const [retrying,   setRetrying]   = useState(false)
-  const [retryErr,   setRetryErr]   = useState('')
-  const m       = agent.metrics || {}
-  const isJudge = agent.agent_type === 'judge'
-  const accent  = isJudge ? '#7c3aed' : '#6366f1'
+  const [editAgent,       setEditAgent]       = useState(false)
+  const [newVersion,      setNewVersion]      = useState(false)
+  const [retrying,  setRetrying]  = useState(false)
+  const [retryErr,  setRetryErr]  = useState('')
+  const m         = agent.metrics || {}
+  const isJudge   = agent.agent_type === 'judge' || agent.agent_type === 1
+  const accent    = isJudge ? '#7c3aed' : '#6366f1'
   const isPending = agent.status === 'pending_signature'
 
   async function retryRegistration() {
@@ -517,17 +529,25 @@ function AgentRow({ agent, index }) {
               {isJudge ? 'Judge' : 'Provider'}
             </span>
             <span className="text-xs text-am-muted font-mono">v{agent.version}</span>
-            <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${
-              isPending
-                ? 'bg-amber-50 text-amber-700 border border-amber-300'
+            <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium border ${
+              isPending || agent.status === 'pending_index'
+                ? 'bg-amber-50 text-amber-700 border-amber-300'
+                : agent.status === 'pending_validation'
+                ? 'bg-violet-50 text-violet-700 border-violet-300'
+                : agent.status === 'rejected'
+                ? 'bg-rose-50 text-rose-700 border-rose-300'
                 : 'badge-emerald'
-            }`}>{agent.status || 'active'}</span>
+            }`}>
+              {agent.status === 'pending_validation' ? 'Pending Validation'
+               : agent.status === 'rejected'         ? 'Technical Test Failed'
+               : agent.status || 'active'}
+            </span>
           </div>
 
           {/* Metrics */}
           <div className="flex flex-wrap gap-3 mt-2 mb-3">
             {[
-              { icon: CheckCircle, val: `${m.success_rate ?? 0}%`,              label: 'success',  color: '#10b981' },
+              { icon: CheckCircle, val: isJudge && !(m.tasks_performed > 0) ? '—' : `${m.success_rate ?? 0}%`, label: 'success', color: '#10b981' },
               { icon: Activity,    val: (m.tasks_performed ?? 0).toLocaleString(), label: 'tasks',  color: accent   },
               { icon: Zap,         val: `${m.avg_response_time ?? 0}s`,          label: 'avg resp', color: '#8b5cf6' },
               { icon: Wallet,      val: `${agent.earnings_eth || '0'} ETH`,      label: 'earned',   color: '#f59e0b' },
@@ -539,6 +559,27 @@ function AgentRow({ agent, index }) {
               </div>
             ))}
           </div>
+
+          {/* Statut test technique — juges seulement */}
+          {isJudge && (
+            <div className="flex items-center gap-2 mb-2">
+              {agent.status === 'active' && (
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 font-medium">
+                  <CheckCircle size={10} /> Juge validé
+                </span>
+              )}
+              {agent.status === 'pending_validation' && (
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200 font-medium">
+                  <Clock size={10} /> Test technique en cours...
+                </span>
+              )}
+              {agent.status === 'validation_failed' && (
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200 font-medium">
+                  <AlertCircle size={10} /> Validation échouée — déployez une nouvelle version
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -592,7 +633,13 @@ function AgentRow({ agent, index }) {
           </div>
         </div>
 
-        <ReputationRing score={m.reputation_score ?? 50} size={52} stroke={4} />
+        {!(m.tasks_performed > 0) ? (
+          <div className="w-[52px] h-[52px] rounded-full border-2 border-dashed border-am-border flex items-center justify-center">
+            <span className="text-xs text-am-muted">New</span>
+          </div>
+        ) : (
+          <ReputationRing score={m.reputation_score ?? 0} size={52} stroke={4} />
+        )}
       </div>
 
       {/* Footer bar */}

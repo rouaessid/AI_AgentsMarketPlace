@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import asyncio
 import logging
 import os
@@ -14,9 +14,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1.router import router as v1_router
+from app.routes.router import router as v1_router
 from app.core.config import get_settings
-from app.db.database import init_db
+from app.repo.database import init_db
 from app.services.ngrok_service import (
     get_ngrok_url, get_all_endpoints,
     start_ngrok, stop_ngrok,
@@ -56,15 +56,8 @@ async def lifespan(_app: FastAPI):
     from app.services.agent_service import restore_from_db
     await restore_from_db()
 
-    # 3. Reset orphaned validations and pipeline tasks (backend was killed mid-run)
-    from app.db.access_repo import reset_stale_validations
-    from app.db.pipeline_repo import reset_stale_pipeline_tasks
-    try:
-        stale = reset_stale_validations()
-        if stale:
-            logger.warning("Reset %d stale validation session(s) to 'awaiting_run'", stale)
-    except Exception as _e:
-        logger.warning("Could not reset stale validation sessions: %s", _e)
+    # 3. Reset orphaned pipeline tasks (backend was killed mid-run)
+    from app.repo.pipeline_repo import reset_stale_pipeline_tasks
     try:
         stale_tasks = reset_stale_pipeline_tasks()
         if stale_tasks:
@@ -77,38 +70,41 @@ async def lifespan(_app: FastAPI):
     # 5. Backfill embeddings for agents registered before embedding support
     async def _backfill_embeddings():
         import asyncio as _aio
-        from app.db.database import AgentEmbedding, get_session
+        from app.repo.database import get_session
+        from app.entities.agent import AgentEmbedding
         from app.services.matching_service import embed_agent_capabilities
         from app.services.agent_service import get_agent_from_cache, _fetch_ipfs_manifest
-        import json as _json
         with get_session() as _s:
-            rows = (
+            agent_ids = [
+                r.agent_id for r in
                 _s.query(AgentEmbedding)
                 .filter(AgentEmbedding.capability_embedding.is_(None))
-                .filter(AgentEmbedding.ipfs_cid.isnot(None))
                 .all()
-            )
-            rows = [{"agent_id": r.agent_id, "ipfs_cid": r.ipfs_cid} for r in rows]
-        if not rows:
+            ]
+        if not agent_ids:
             return
-        logger.info("Backfilling embeddings for %d agent(s)…", len(rows))
+        logger.info("Backfilling embeddings for %d agent(s)…", len(agent_ids))
         loop = _aio.get_event_loop()
-        for row in rows:
+        for agent_id in agent_ids:
             try:
-                cached = get_agent_from_cache(row["agent_id"])
-                meta_raw = (cached or {}).get("identity_metadata") if cached else None
-                if meta_raw:
-                    meta = _json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
-                else:
-                    manifest = _fetch_ipfs_manifest(row["ipfs_cid"], row["agent_id"])
-                    if not manifest:
-                        continue
-                    meta = manifest.model_dump()
+                cached = get_agent_from_cache(agent_id)
+                if not cached:
+                    continue
+                # Récupère ipfs_cid depuis le cache (chargé depuis The Graph au démarrage)
+                ipfs_cid = cached.get("ipfs_cid")
+                if not ipfs_cid:
+                    continue
+                manifest = await loop.run_in_executor(
+                    None, lambda c=ipfs_cid, a=agent_id: _fetch_ipfs_manifest(c, a)
+                )
+                if not manifest:
+                    continue
+                meta = manifest.model_dump()
                 await loop.run_in_executor(
-                    None, lambda m=meta, a=row["agent_id"]: embed_agent_capabilities(a, m)
+                    None, lambda m=meta, a=agent_id: embed_agent_capabilities(a, m)
                 )
             except Exception as _e:
-                logger.warning("Embedding backfill failed for %s: %s", row["agent_id"], _e)
+                logger.warning("Embedding backfill failed for %s: %s", agent_id, _e)
 
     backfill_task = asyncio.create_task(_backfill_embeddings())
 
@@ -135,6 +131,9 @@ async def lifespan(_app: FastAPI):
     await stop_watchdog()
     await stop_ngrok()
 
+
+# Honeypot trace cache — keyed by fake CID, served by /ipfs/{cid} proxy
+_HONEYPOT_CACHE: dict[str, dict] = {}
 
 app = FastAPI(
     title="AgentMarket API",
@@ -178,9 +177,15 @@ async def health():
 @app.get("/ipfs/{cid}", tags=["ipfs"])
 async def serve_ipfs(cid: str):
     """Proxy IPFS content to judge containers via host.docker.internal → Pinata.
-    Injects challenge_token if a validation round is active for this CID."""
+    Serves honeypot traces from _HONEYPOT_CACHE if CID matches, otherwise
+    falls through to real IPFS gateways. Injects challenge_token in both cases."""
     import httpx
     from app.services.judge_service import _CHALLENGE_STORE
+
+    # Honeypot trace — served locally, never hits real IPFS
+    if cid in _HONEYPOT_CACHE:
+        return JSONResponse(_HONEYPOT_CACHE[cid])
+
     for gateway in [
         f"https://gateway.pinata.cloud/ipfs/{cid}",
         f"https://ipfs.io/ipfs/{cid}",

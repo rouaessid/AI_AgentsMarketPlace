@@ -73,7 +73,11 @@ export default function AgentCard({ agent, index = 0 }) {
           </div>
 
           <div className="flex flex-col items-end gap-1">
-            <ReputationRing score={m.reputation_score ?? 50} size={46} stroke={4} />
+            {!(m.tasks_performed > 0) ? (
+              <span className="text-xs text-am-muted italic">New</span>
+            ) : (
+              <ReputationRing score={m.reputation_score ?? 0} size={46} stroke={4} />
+            )}
             {m.rank <= 3 && (
               <span className="text-xs font-bold" style={{
                 color: m.rank === 1 ? '#d97706' : m.rank === 2 ? '#64748b' : '#92400e'
@@ -89,9 +93,11 @@ export default function AgentCard({ agent, index = 0 }) {
 
         {/* Stats */}
         <div className="grid grid-cols-3 gap-2 mb-4">
-          <StatBox value={`${m.success_rate ?? 0}%`}  label="Success"  color={
-            (m.success_rate ?? 0) >= 95 ? '#10b981' : (m.success_rate ?? 0) >= 80 ? '#f59e0b' : '#f43f5e'
-          } />
+          <StatBox
+            value={(agent.agent_type === 'judge' || agent.agent_type === 1) && !(m.tasks_performed > 0) ? '—' : `${m.success_rate ?? 0}%`}
+            label="Success"
+            color={(m.success_rate ?? 0) >= 95 ? '#10b981' : (m.success_rate ?? 0) >= 80 ? '#f59e0b' : '#f43f5e'}
+          />
           <StatBox value={
             (m.tasks_performed ?? 0) >= 1000
               ? `${((m.tasks_performed ?? 0)/1000).toFixed(1)}k`

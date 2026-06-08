@@ -4,32 +4,36 @@ pragma solidity ^0.8.25;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/**
- * @title StakingContract
- * @notice Gère le stake des providers et judges.
- *         Slash déclenché uniquement par ValidationRegistry.
- */
+// ════════════════════════════════════════════════════════════════════════════
+//  StakingContract — AgentMarket
+//  Gère le stake des providers et judges.
+//  Slash déclenché uniquement par ValidationRegistry.
+// ════════════════════════════════════════════════════════════════════════════
+
 contract StakingContract is Ownable, ReentrancyGuard {
 
-    // ── Structs ──────────────────────────────────────────────────────────────
+    // ── Type Declarations ─────────────────────────────────────────────────────
 
     struct StakeInfo {
-        uint256 amount;          // montant staké en wei
-        uint256 lockedUntil;     // timestamp — locked si tâche en cours
+        uint256 amount;       // montant staké en wei
+        uint256 lockedUntil;  // timestamp — locked si tâche en cours
         bool    exists;
     }
 
-    // ── State ─────────────────────────────────────────────────────────────────
-
-    mapping(address => StakeInfo) public stakes;
+    // ── Constants ─────────────────────────────────────────────────────────────
 
     uint256 public constant MIN_PROVIDER_STAKE = 0.001 ether;
     uint256 public constant MIN_JUDGE_STAKE    = 0.0005 ether;
     uint256 public constant SLASH_PROVIDER_BPS = 1000; // 10%
     uint256 public constant SLASH_JUDGE_BPS    = 500;  // 5%
 
+    // ── State Variables ───────────────────────────────────────────────────────
+
     address public validationRegistry;
     address public platformWallet;
+
+    // wallet → stake de cet agent
+    mapping(address => StakeInfo) public stakes;
 
     // ── Events ────────────────────────────────────────────────────────────────
 
@@ -65,11 +69,11 @@ contract StakingContract is Ownable, ReentrancyGuard {
         platformWallet = _wallet;
     }
 
-    // ── Stake ─────────────────────────────────────────────────────────────────
+    // ── External — Stake / Withdraw ───────────────────────────────────────────
 
     /**
      * @notice Déposer un stake.
-     * @dev Appelé par provider ou judge.
+     * @dev Appelé par provider ou judge avant toute participation.
      */
     function stake() external payable nonReentrant {
         require(msg.value > 0, "StakingContract: amount must be > 0");
@@ -103,70 +107,40 @@ contract StakingContract is Ownable, ReentrancyGuard {
         emit Unstaked(msg.sender, amount);
     }
 
-    // ── Lock / Unlock ─────────────────────────────────────────────────────────
+    // ── External — Lock / Unlock (ValidationRegistry only) ───────────────────
 
     /**
-     * @notice Lock le stake d'un agent pendant une tâche.
-     * @dev Appelé par ValidationRegistry au début d'une validation.
+     * @notice Lock le stake pendant une validation.
      */
-    function lockStake(address agent, uint256 duration)
-        external
-        onlyValidationRegistry
-    {
+    function lockStake(address agent, uint256 duration) external onlyValidationRegistry {
         stakes[agent].lockedUntil = block.timestamp + duration;
     }
 
     /**
-     * @notice Unlock le stake d'un agent après une tâche.
+     * @notice Unlock le stake après une validation.
      */
-    function unlockStake(address agent)
-        external
-        onlyValidationRegistry
-    {
+    function unlockStake(address agent) external onlyValidationRegistry {
         stakes[agent].lockedUntil = 0;
     }
 
-    // ── Slash ─────────────────────────────────────────────────────────────────
+    // ── External — Slash (ValidationRegistry only) ────────────────────────────
 
     /**
-     * @notice Slash un provider (résultat INVALID).
-     * @dev 10% du stake → plateforme.
+     * @notice Slash provider (résultat INVALID) — 10% du stake vers plateforme.
      */
     function slashProvider(address agent)
-        external
-        onlyValidationRegistry
-        returns (uint256 slashedAmount)
+        external onlyValidationRegistry returns (uint256)
     {
         return _slash(agent, SLASH_PROVIDER_BPS, "INVALID_RESULT");
     }
 
     /**
-     * @notice Slash un judge contre consensus.
-     * @dev 5% du stake → plateforme.
+     * @notice Slash judge contre consensus — 5% du stake vers plateforme.
      */
     function slashJudge(address agent)
-        external
-        onlyValidationRegistry
-        returns (uint256 slashedAmount)
+        external onlyValidationRegistry returns (uint256)
     {
         return _slash(agent, SLASH_JUDGE_BPS, "AGAINST_CONSENSUS");
-    }
-
-    function _slash(
-        address agent,
-        uint256 bps,
-        string memory reason
-    ) internal returns (uint256 slashedAmount) {
-        StakeInfo storage s = stakes[agent];
-        require(s.exists && s.amount > 0, "StakingContract: no stake to slash");
-
-        slashedAmount = (s.amount * bps) / 10_000;
-        s.amount     -= slashedAmount;
-
-        (bool ok, ) = platformWallet.call{value: slashedAmount}("");
-        require(ok, "StakingContract: slash transfer failed");
-
-        emit Slashed(agent, slashedAmount, reason);
     }
 
     // ── Views ─────────────────────────────────────────────────────────────────
@@ -185,6 +159,25 @@ contract StakingContract is Ownable, ReentrancyGuard {
 
     function isLocked(address agent) external view returns (bool) {
         return block.timestamp < stakes[agent].lockedUntil;
+    }
+
+    // ── Internal ──────────────────────────────────────────────────────────────
+
+    function _slash(
+        address agent,
+        uint256 bps,
+        string memory reason
+    ) internal returns (uint256 slashedAmount) {
+        StakeInfo storage s = stakes[agent];
+        require(s.exists && s.amount > 0, "StakingContract: no stake to slash");
+
+        slashedAmount = (s.amount * bps) / 10_000;
+        s.amount     -= slashedAmount;
+
+        (bool ok, ) = platformWallet.call{value: slashedAmount}("");
+        require(ok, "StakingContract: slash transfer failed");
+
+        emit Slashed(agent, slashedAmount, reason);
     }
 
     // ── Receive ───────────────────────────────────────────────────────────────

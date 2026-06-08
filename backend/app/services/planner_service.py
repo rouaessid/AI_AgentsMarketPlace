@@ -1,4 +1,4 @@
-"""
+﻿"""
 planner_service.py — Décomposition de tâche en SubTask DAG via Groq LLM.
 
 Flux :
@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
 from typing import Literal
 
 from groq import Groq
 
 from app.core.config import get_settings
+from app.schemas.pipeline import SubTask, TaskPlan
 
 logger   = logging.getLogger(__name__)
 settings = get_settings()
@@ -68,28 +68,10 @@ Réponds UNIQUEMENT en JSON valide, sans texte autour :
 """
 
 
-@dataclass
-class SubTask:
-    id:          str
-    domain:      str
-    description: str
-    depends_on:  list[str] = field(default_factory=list)
-    output_type: str = "text"
-
-
-@dataclass
-class TaskPlan:
-    mode:       Literal["solo", "pipeline"]
-    subtasks:   list[SubTask]
-    reasoning:  str
-    pack_name:  str = ""
-    pack_rationale: str = ""
-
-
 def _get_available_domains() -> list[str]:
     """Lit les domaines disponibles depuis les skills des agents actifs en DB."""
     try:
-        from app.db.identity_repo import get_all_agent_identities
+        from app.repo.identity_repo import get_all_agent_identities
         rows    = get_all_agent_identities()
         domains: set[str] = set()
         for row in rows:

@@ -52,6 +52,7 @@ logs/
 .env
 .env.local
 .env.production
+.env.testnet-*
 secrets.json
 private_keys.txt
 

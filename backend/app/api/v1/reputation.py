@@ -1,14 +1,9 @@
-"""
+﻿"""
 reputation.py — /api/v1/reputation endpoints.
 
-Phase 1 : signaux bruts agrégés depuis reputation_events (on-chain).
-Phase 2 : scores EigenTrust OpenRank calculés off-chain.
-
-Architecture OpenRank :
-  p  = SuccessRate normalisé  (Judge → Agent, ancre technique)
-  C  = collaborations         (Agent → Agent, propagation — Phase 3)
-  t  = Global-Trust           (Power Method)
-  Score_Final = t × starred   (User → Agent, pondérateur contextuel)
+Sources :
+  starred signals  →  The Graph (NewFeedback events, N acheteurs unbounded)
+  eigenTrust score →  ReputationRegistry.eigenTrustScore[tokenId] direct RPC
 """
 from __future__ import annotations
 import asyncio
@@ -18,7 +13,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.db.identity_repo import get_agent_identity, get_all_agent_identities
+from app.repo.identity_repo import get_agent_identity, get_all_agent_identities
+from app.models.reputation import FeedbackBody, SimulateValidationBody
 from app.services.graph_client import (
     get_aggregated_reputation as get_aggregated_score,
     get_reputation_events as get_reputation_signals,
@@ -34,17 +30,6 @@ def _fire(coro) -> None:
     task = asyncio.create_task(coro)
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
-
-
-# ── Request bodies ────────────────────────────────────────────────────────────
-
-class FeedbackBody(BaseModel):
-    score:   int        # 1-5 stars
-    comment: str = ""
-
-class SimulateValidationBody(BaseModel):
-    agent_id: str
-    score:    int = 80  # validation score 0-100
 
 
 # ── Debug: simulate a judge validation ───────────────────────────────────────
@@ -64,8 +49,8 @@ async def simulate_validation(body: SimulateValidationBody):
     if not token_id:
         raise HTTPException(400, detail=_NOT_ON_CHAIN)
 
-    from app.services.eigentrust_sync import sync_eigentrust_onchain
-    _fire(sync_eigentrust_onchain())
+    from app.services.eigentrust_sync import compute_and_write_eigentrust
+    _fire(compute_and_write_eigentrust(body.agent_id, 0, 0.0))
 
     return {"status": "ok", "tx_hash": "", "simulated_score": body.score, "token_id": token_id}
 
@@ -89,8 +74,8 @@ async def feedback_notify(agent_id: str, body: FeedbackNotifyBody):
     if not identity:
         raise HTTPException(404, detail=f"Agent {agent_id!r} introuvable")
 
-    from app.services.eigentrust_sync import sync_eigentrust_onchain
-    _fire(sync_eigentrust_onchain())
+    from app.services.eigentrust_sync import compute_and_write_eigentrust
+    _fire(compute_and_write_eigentrust(agent_id, 0, 0.0))
 
     return {"status": "ok", "tx_hash": body.tx_hash}
 
@@ -138,100 +123,55 @@ async def get_reputation(agent_id: str):
             "message":    _NOT_ON_CHAIN,
         })
 
+    # starred signals depuis The Graph (N acheteurs, unbounded)
     raw_signals = get_aggregated_score(token_id)
     signals     = get_reputation_signals(token_id)
 
-    # ── EigenTrust OpenRank (calcul sur tous les agents actifs) ────────────────
-    eigentrust_data = None
-    try:
-        from app.services.eigentrust_service import compute_eigentrust
+    from app.services.graph_client import get_eigentrust_score, get_agent_score
+    et_raw    = get_eigentrust_score(token_id)
+    avg_data  = get_agent_score(agent_id)
+    avg_score = float(avg_data.get("averageScore", 0)) if avg_data else 0.0
 
-        all_identities = get_all_agent_identities()
-        agents = [
-            {"agent_id": row["agent_id"], "token_id": row["current_token_id"]}
-            for row in all_identities
-            if row.get("current_token_id") and row.get("agent_type", 0) != 1
-        ]
+    # N=1 EigenTrust always normalises to 100 — cap at real validation average
+    final_100 = min(et_raw, avg_score) if et_raw else avg_score
 
-        if agents:
-            from app.services.graph_client import get_solo_scores, get_pipeline_scores
-            p_overrides = {}
-            for a in agents:
-                scores = get_solo_scores(a["agent_id"]) or get_pipeline_scores(a["agent_id"])
-                if scores:
-                    nonzero = [s for s in scores if s > 0]
-                    recent  = nonzero[-5:] if nonzero else []
-                    if recent:
-                        p_overrides[a["agent_id"]] = sum(recent) / len(recent)
+    # user_feedback from starred signals (0–100 scale → 0–1)
+    starred    = raw_signals.get("starred", {})
+    user_fb    = round(starred.get("average", 0) / 100.0, 4) if starred else None
 
-            # Only compute EigenTrust if there are real signals (avoid 1/n inflation)
-            has_real_signals = bool(raw_signals) or bool(p_overrides)
-            if not has_real_signals:
-                eigentrust_data = {
-                    "pre_trust": 0.0, "global_trust": 0.0,
-                    "user_feedback": 0.0, "final_score": 0.0,
-                    "converged": True, "iterations": 0,
-                    "agents_in_network": len(agents),
-                }
-            else:
-                result = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
-                agent_score = result.scores_by_agent.get(agent_id)
-                if agent_score:
-                    eigentrust_data = {
-                        **agent_score,
-                        "converged":  result.converged,
-                        "iterations": result.iterations,
-                        "agents_in_network": len(agents),
-                    }
-    except Exception as e:
-        logger.warning("EigenTrust computation failed (non-blocking): %s", e)
+    eigentrust_obj = {
+        "final_score":   round(final_100 / 100.0, 4),
+        "pre_trust":     round(avg_score  / 100.0, 4),
+        "user_feedback": user_fb,
+        "converged":     True,
+        "iterations":    1,
+        "agents_in_network": 1,
+    } if (final_100 or avg_score) else None
 
     return JSONResponse({
         "agent_id":    agent_id,
         "token_id":    token_id,
         "raw_signals": raw_signals,
-        "eigentrust":  eigentrust_data,
+        "eigentrust":  eigentrust_obj,
         "signals":     signals,
     })
 
 
 @router.get("/network/scores")
 async def get_network_scores():
-    """
-    Calcule et retourne les scores EigenTrust pour tous les agents du réseau.
-    Utile pour le dashboard et le matching de juges (Phase 4).
-    """
-    try:
-        from app.services.eigentrust_service import compute_eigentrust
+    """Retourne les scores EigenTrust courants pour tous les agents — direct RPC."""
+    from app.services.graph_client import get_eigentrust_score
 
-        all_identities = get_all_agent_identities()
-        agents = [
-            {"agent_id": row["agent_id"], "token_id": row["current_token_id"]}
-            for row in all_identities
-            if row.get("current_token_id") and row.get("agent_type", 0) != 1
-        ]
+    all_identities = get_all_agent_identities()
+    agents = [
+        row for row in all_identities
+        if row.get("current_token_id") and row.get("agent_type", 0) != 1
+    ]
+    if not agents:
+        return JSONResponse({"agents": {}, "message": "Aucun agent enregistré on-chain"})
 
-        if not agents:
-            return JSONResponse({"agents": {}, "message": "Aucun agent enregistré on-chain"})
-
-        from app.services.graph_client import get_solo_scores
-        p_overrides = {}
-        for a in agents:
-            scores = get_solo_scores(a["agent_id"])
-            if scores:
-                nonzero = [s for s in scores if s > 0]
-                recent  = nonzero[-5:] if nonzero else []
-                if recent:
-                    p_overrides[a["agent_id"]] = sum(recent) / len(recent)
-
-        result = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
-        return JSONResponse({
-            "agents":     result.scores_by_agent,
-            "converged":  result.converged,
-            "iterations": result.iterations,
-            "network_size": len(agents),
-        })
-
-    except Exception as e:
-        logger.error("Network EigenTrust failed: %s", e)
-        raise HTTPException(500, detail=f"Calcul EigenTrust échoué : {e}")
+    scores = {}
+    for row in agents:
+        score = get_eigentrust_score(row["current_token_id"])
+        scores[row["agent_id"]] = score
+    return JSONResponse({"agents": scores, "network_size": len(agents)})

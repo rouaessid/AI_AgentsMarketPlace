@@ -230,6 +230,17 @@ async function recoverPendingAgent(info, wallet, provider, identityAddr, staking
     console.log(`  Token ID: ${tokenId ?? "(not parsed)"}`);
   }
 
+  // Stake avant confirm (même ordre que l'enregistrement normal)
+  console.log(`  → Staking 0.001 ETH (recovery) ...`);
+  const stakeTx = await wallet.sendTransaction({
+    to:       stakingAddr,
+    value:    ethers.parseEther("0.001"),
+    data:     "0x3a4b66f1",
+    gasLimit: BigInt(200_000),
+  });
+  await waitReceipt(provider, stakeTx.hash);
+  console.log("  ✓ Staked (recovery)");
+
   if (!registrationTxHash) {
     console.log("  ✗ Could not find tx_hash for confirm — skipping confirm.");
   } else {
@@ -239,18 +250,8 @@ async function recoverPendingAgent(info, wallet, provider, identityAddr, staking
       tx_hash:         registrationTxHash,
       ...(tokenId != null && { token_id: tokenId }),
     });
-    console.log("  ✓ Confirmed");
+    console.log(`  ✓ Confirmed — ${info.agent_id} recovered.`);
   }
-
-  console.log(`  → Staking 0.001 ETH (recovery) ...`);
-  const stakeTx = await wallet.sendTransaction({
-    to:       stakingAddr,
-    value:    ethers.parseEther("0.001"),
-    data:     "0x3a4b66f1",
-    gasLimit: BigInt(200_000),
-  });
-  await waitReceipt(provider, stakeTx.hash);
-  console.log(`  Staked — ${info.agent_id} recovered.`);
 }
 
 async function registerJudge(info, deployer, provider, identityAddr, stakingAddr) {
@@ -298,14 +299,8 @@ async function registerJudge(info, deployer, provider, identityAddr, stakingAddr
   const tokenId = parseTokenId(receipt, reg.unsigned_tx.contract_address);
   console.log(`  Token ID        : ${tokenId ?? "(not parsed)"}`);
 
-  console.log("  → POST /api/v1/agents/confirm ...");
-  await backendPost("/api/v1/agents/confirm", {
-    registration_id: reg.registration_id,
-    tx_hash:         identityTx.hash,
-    ...(tokenId != null && { token_id: tokenId }),
-  });
-
-  console.log(`  → Staking 0.001 ETH ...`);
+  // Stake AVANT le confirm — juge financièrement engagé avant honeypot
+  console.log(`  → Staking 0.001 ETH (avant honeypot) ...`);
   const stakeTx = await wallet.sendTransaction({
     to:       stakingAddr,
     value:    ethers.parseEther("0.001"),
@@ -313,7 +308,16 @@ async function registerJudge(info, deployer, provider, identityAddr, stakingAddr
     gasLimit: BigInt(200_000),
   });
   await waitReceipt(provider, stakeTx.hash);
-  console.log(`  Done — ${info.agent_id} is live.`);
+  console.log("  ✓ Staked");
+
+  // POST /confirm — honeypot onboarding lancé en background par le backend (async)
+  console.log("  → POST /api/v1/agents/confirm  [honeypot onboarding en background] ...");
+  await backendPost("/api/v1/agents/confirm", {
+    registration_id: reg.registration_id,
+    tx_hash:         identityTx.hash,
+    ...(tokenId != null && { token_id: tokenId }),
+  });
+  console.log(`  ✓ Done — ${info.agent_id} is live and authorized.`);
 }
 
 async function main() {

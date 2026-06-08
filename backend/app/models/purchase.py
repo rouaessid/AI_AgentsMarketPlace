@@ -3,12 +3,12 @@ from pydantic import BaseModel
 
 
 class PurchaseInfoResponse(BaseModel):
-    task_id:       str
-    agent_id:      str
-    required_wei:  str          # hex string for MetaMask
-    required_eth:  float
+    task_id:        str
+    agent_id:       str
+    required_wei:   str
+    required_eth:   float
     escrow_address: str
-    call_data:     str          # encoded depositPayment() calldata for MetaMask
+    call_data:      str
 
 
 class PurchaseRequest(BaseModel):
@@ -21,9 +21,8 @@ class PurchaseResponse(BaseModel):
     access_id:         str
     agent_id:          str
     task_id:           str
-    tx_hash:           str
-    status:            str      # "granted"
-    validation_status: str      # "pending"
+    status:            str
+    validation_status: str
     message:           str = "Access granted — validation in progress"
 
 
@@ -32,23 +31,23 @@ class AccessStatus(BaseModel):
     buyer_wallet:      str
     has_access:        bool
     task_id:           str | None = None
-    tx_hash:           str | None = None
-    validation_status: str | None = None   # pending / in_progress / validated / rejected
+    validation_status: str | None = None
 
 
 class JudgeVerdictOut(BaseModel):
-    judge_id:      str
-    judge_name:    str
-    score:         int
-    justification: str
-    verdict:       str          # VALID | INVALID
+    judge_id:               str
+    judge_name:             str
+    score:                  int | None = None
+    verdict:                str | None = None
+    justification_ipfs_cid: str | None = None
 
 
 class ValidationStatusResponse(BaseModel):
-    agent_id:         str
-    status:           str       # pending / in_progress / validated / rejected
+    agent_id:          str
+    val_task_id:       str | None = None
+    status:            str | None = None
     consensus_verdict: str | None = None
-    aggregated_score: int | None = None
-    judges:           list[JudgeVerdictOut] = []
-    started_at:       str | None = None
-    finished_at:      str | None = None
+    aggregated_score:  int | None = None
+    justification_uri: str | None = None  # IPFS URI of aggregated judge justifications
+    judges:            list[JudgeVerdictOut] = []
+    started_at:        str | None = None

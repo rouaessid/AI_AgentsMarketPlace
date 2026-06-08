@@ -1,0 +1,56 @@
+@startuml
+title Enregistrement d'un Agent - Etape 2 : Activation du Juge (honeypot)
+
+skinparam sequenceMessageAlign center
+skinparam backgroundColor white
+
+participant "Backend"            as API
+database    "PostgreSQL"         as DB
+participant "ValidationRegistry" as VR   #LightBlue
+participant "Container du juge"  as JC   #LightYellow
+participant "Frontend"           as Client
+
+note over API, JC
+  Suite de l'Etape 1 pour les agents de type JUGE uniquement.
+  Lance en tache de fond depuis POST /confirm (~25s).
+end note
+
+== Test technique ==
+
+API  ->>  JC  : lancerContainer(tacheDeTest)
+activate JC
+
+JC   ->   API : demanderTache(judgeId)
+activate API
+API  -->  JC  : fournirTrace(executionTrace)
+deactivate API
+
+JC   ->   API : soumettreResultat(judgeId, score, resultCID)
+activate API
+
+alt Test reussi
+    API  ->  VR  : enregistrerResultat(judgeId, pass=true, resultCID)
+    activate VR
+    VR   -->  API : HoneypotPassed(judgeId, resultCID)
+    deactivate VR
+    API  ->  DB  : mettreAJourStatut(actif)
+    activate DB
+    DB   -->  API : ok
+    deactivate DB
+
+else Test echoue
+    API  ->  VR  : enregistrerResultat(judgeId, pass=false, resultCID)
+    activate VR
+    VR   -->  API : HoneypotFailed(judgeId, resultCID)
+    deactivate VR
+    API  ->  DB  : mettreAJourStatut(validationEchouee)
+    activate DB
+    DB   -->  API : ok
+    deactivate DB
+end
+
+API  -->  JC  : ack
+deactivate API
+deactivate JC
+
+@enduml

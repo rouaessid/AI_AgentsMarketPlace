@@ -16,33 +16,7 @@ from app.core.config import get_settings
 logger   = logging.getLogger(__name__)
 settings = get_settings()
 
-# ABI minimal pour encoder register() (utilisé par _build_register_tx dans agent_service)
-_IDENTITY_ABI = [
-    {
-        "inputs": [
-            {"internalType": "string",  "name": "agentId_",      "type": "string"},
-            {"internalType": "uint8",   "name": "agentType_",    "type": "uint8"},
-            {"internalType": "string",  "name": "agentURI_",     "type": "string"},
-            {"internalType": "string",  "name": "version_",      "type": "string"},
-            {"internalType": "uint256", "name": "pricePerTask_", "type": "uint256"},
-        ],
-        "name": "register",
-        "outputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-    {
-        "inputs": [
-            {"internalType": "string", "name": "agentId_",    "type": "string"},
-            {"internalType": "string", "name": "newURI_",     "type": "string"},
-            {"internalType": "string", "name": "newVersion_", "type": "string"},
-        ],
-        "name": "mintNewVersion",
-        "outputs": [{"internalType": "uint256", "name": "newTokenId", "type": "uint256"}],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-]
+from app.core.abis import IDENTITY_REGISTRY_ABI as _IDENTITY_ABI
 
 
 class BlockchainService:

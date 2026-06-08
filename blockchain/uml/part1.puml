@@ -1,0 +1,64 @@
+@startuml
+skinparam sequenceMessageAlign left
+skinparam backgroundColor white
+skinparam defaultFontSize 10
+skinparam sequenceArrowThickness 1
+skinparam sequenceDividerFontSize 10
+
+autonumber
+
+actor       "Vendeur"       as Seller
+participant "Frontend"      as Client
+participant "MetaMask"      as MM   #Orange
+participant "Serveur"       as API
+database    "PostgreSQL"    as DB
+participant "IPFS"          as IPFS
+participant "IdentityReg."  as IR   #LightBlue
+
+== Soumission ==
+
+Seller  ->  Client : soumettreFormulaire()
+activate Client
+
+Client  ->  API    : enregistrerAgent(agentData)
+activate API
+
+API     ->  IPFS   : uploadMetadonnees(agentData)
+activate IPFS
+IPFS   -->  API    : agentURI
+deactivate IPFS
+
+API     ->  DB     : creerAgent(agentId, Status)
+activate DB
+DB     -->  API    : ok
+deactivate DB
+
+API    -->  Client : unsignedTx(agentId)
+deactivate API
+deactivate Client
+
+== Identite sur la blockchain ==
+
+Seller  ->  Client : confirmerSignature()
+activate Client
+
+Client  ->  MM     : signerEtEnvoyer(tx)
+activate MM
+
+MM     ->>  Seller : demanderApprobation()
+Seller -->  MM     : approuve
+
+MM      ->  IR     : register(agentId, agentType, ...)
+activate IR
+IR     ->  IR     : emit AgentCreated(tokenId)
+activate IR
+deactivate IR
+IR     -->  MM     : txHash
+deactivate IR
+
+MM     -->  Client : transactionConfirmee(txHash, tokenId)
+deactivate MM
+deactivate Client
+
+note over IR : The Graph lit les logs\nde la blockchain (async)\net indexe AgentCreated
+@enduml

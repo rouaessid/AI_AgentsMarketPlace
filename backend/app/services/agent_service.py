@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -111,15 +111,7 @@ def _build_reg_file(req: AgentSubmitRequest) -> AgentRegistrationFile:
             "language": req.language, "max_tokens": req.max_tokens,
             "supported_tasks": req.supported_tasks, "special_caps": req.special_caps,
             "env_var_keys": req.env_var_keys,
-            "monthly_tasks": [0] * 12,
-            "weekly_success": [0] * 7,
-            "success_rate": None,
-            "reputation_score": None,
-            "tasks_performed": 0,
-            "usage_count": 0,
             "avg_response_time": None,
-            "task_completion_rate": None,
-            "uptime": None,
         },
         sandbox_config={
             "docker_image": req.docker_image, "cpu_limit": req.cpu_limit,
@@ -139,7 +131,7 @@ def _build_reg_file(req: AgentSubmitRequest) -> AgentRegistrationFile:
 
 def _build_register_tx(req, agent_uri) -> UnsignedTx:
     from web3 import Web3
-    from app.services.blockchain_service import _IDENTITY_ABI
+    from app.core.abis import IDENTITY_REGISTRY_ABI as _IDENTITY_ABI
     contract_addr = settings.identity_registry_address or "0x_NOT_DEPLOYED"
     price_wei = int(req.price_per_task * 10**18)
     data: str | None = None
@@ -182,16 +174,16 @@ async def restore_from_db() -> None:
     Rebuild in-memory cache at startup.
 
     Sources (in priority order):
-      1. agent_embeddings DB — agent_id + ipfs_cid + status (operational state)
-      2. IPFS manifest       — name, price, docker_image, capabilities (canonical identity)
-      3. The Graph           — tokenId, owner, agentType, agentURI (on-chain truth)
+      1. agent_embeddings DB — agent_id + status (operational state)
+      2. The Graph           — tokenId, owner, agentType, agentURI (on-chain truth)
+      3. IPFS manifest       — CID extrait de agentURI — name, price, docker_image, capabilities
       4. agent_telemetry DB  — runtime metrics
     """
-    from app.db.identity_repo import get_all_embeddings, upsert_agent_identity
-    from app.db.telemetry_repo import get_all_telemetry
-    from app.services.graph_client import get_agent, get_latest_eigentrust_score
+    from app.repo.identity_repo import get_all_embeddings, upsert_agent_identity
+    from app.repo.telemetry_repo import get_all_telemetry
+    from app.services.graph_client import get_agent, get_eigentrust_score, get_agent_score, get_agent_validation_history
 
-    rows      = get_all_embeddings()   # [{agent_id, ipfs_cid, status, capability_embedding}]
+    rows      = get_all_embeddings()   # [{agent_id, capability_embedding, status}]
     telemetry = get_all_telemetry()    # {agent_id: dict}
 
     if not rows:
@@ -203,13 +195,7 @@ async def restore_from_db() -> None:
             logger.info("The Graph ne retourne aucun agent — DB reste vide")
             return
         for ga in graph_agents:
-            agent_uri = ga.get("agentURI") or ""
-            ipfs_cid  = agent_uri.removeprefix("ipfs://") if agent_uri.startswith("ipfs://") else None
-            upsert_agent_identity(
-                agent_id=ga["id"],
-                ipfs_cid=ipfs_cid,
-                status="active",
-            )
+            upsert_agent_identity(agent_id=ga["id"])
             logger.info("Bootstrap: %s (tokenId=%s)", ga["id"], ga.get("tokenId"))
         rows = get_all_embeddings()
         if not rows:
@@ -223,11 +209,13 @@ async def restore_from_db() -> None:
     loop = _asyncio.get_event_loop()
 
     async def _fetch_row(row: dict) -> tuple[dict, object, dict | None]:
-        ipfs_cid = row.get("ipfs_cid")
         agent_id = row.get("agent_id")
-        reg_file, on_chain = await _asyncio.gather(
-            loop.run_in_executor(None, lambda c=ipfs_cid, a=agent_id: _fetch_ipfs_manifest(c, a) if c else None),
-            loop.run_in_executor(None, lambda a=agent_id: get_agent(a)),
+        # On-chain d'abord — agentURI contient le CID IPFS
+        on_chain = await loop.run_in_executor(None, lambda a=agent_id: get_agent(a))
+        agent_uri = (on_chain.get("agentURI") or "") if on_chain else ""
+        ipfs_cid  = agent_uri[len("ipfs://"):] if agent_uri.startswith("ipfs://") else None
+        reg_file  = await loop.run_in_executor(
+            None, lambda c=ipfs_cid, a=agent_id: _fetch_ipfs_manifest(c, a) if c else None
         )
         return row, reg_file, on_chain
 
@@ -240,11 +228,8 @@ async def restore_from_db() -> None:
         row, reg_file, on_chain = result
         agent_id = row.get("agent_id")
         try:
-            ipfs_cid = row.get("ipfs_cid")
-            status   = row.get("status", "pending_signature")
-
             if not reg_file:
-                logger.warning("Pas de manifest IPFS pour %s (cid=%s)", agent_id, ipfs_cid)
+                logger.warning("Pas de manifest IPFS pour %s", agent_id)
 
             # ── 2. The Graph (on-chain truth) ─────────────────────────────────
             token_id     = int(on_chain["tokenId"])    if on_chain and on_chain.get("tokenId")    else None
@@ -252,34 +237,43 @@ async def restore_from_db() -> None:
             _manifest_type = getattr(reg_file, "agent_type", None) if reg_file else None
             _manifest_type_v = 1 if str(_manifest_type).lower() in ("1", "judge") else 0
             agent_type_v = int(on_chain["agentType"]) if on_chain and on_chain.get("agentType") else _manifest_type_v
-            agent_uri    = (on_chain.get("agentURI")   if on_chain else None) or (
-                f"ipfs://{ipfs_cid}" if ipfs_cid else None
-            )
+            agent_uri    = (on_chain.get("agentURI") if on_chain else None) or None
             version      = (on_chain.get("version")    if on_chain else None) or (
                 reg_file.version if reg_file else "1.0.0"
             )
-            name         = reg_file.name if reg_file else agent_id
-            pricing      = reg_file.pricing if reg_file else {}
-            # If The Graph confirms on-chain presence, treat as active regardless of DB status
-            if on_chain and token_id:
-                status = "active"
+            name    = reg_file.name if reg_file else agent_id
+            pricing = reg_file.pricing if reg_file else {}
+            # Status : utiliser registration_status DB si dispo, sinon dériver depuis The Graph
+            db_status = row.get("registration_status")
+            if db_status and db_status not in ("pending_signature", "pending_index"):
+                status = db_status  # active / pending_validation / validation_failed
+            elif on_chain and token_id:
+                # Agent indexé — vérifier honeypot pour les juges
+                if agent_type_v == 1:  # JUDGE
+                    from app.services.honeypot_service import is_judge_authorized
+                    status = "active" if is_judge_authorized(agent_id) else "pending_validation"
+                else:
+                    status = "active"
+            else:
+                status = "pending_signature"
 
-            # ── 3. Telemetry ──────────────────────────────────────────────────
+            # ── 3. Telemetry (sandbox metrics uniquement) ─────────────────────
             tel = telemetry.get(agent_id, {})
+            # tasks_performed et last_active viennent de get_agent_score() (The Graph/RPC)
+            agent_score  = get_agent_score(agent_id) if token_id else None
+            _avg_score   = float(agent_score.get("averageScore", 0)) if agent_score else 0.0
+            _et_score    = get_eigentrust_score(token_id) or 0.0
+            _hist        = get_agent_validation_history(agent_id) if token_id else {}
+            _n_agents    = len([a for a in _records.values() if a.current_token_id and a.agent_type != AgentType.JUDGE])
+            # N=1 → EigenTrust artefact (always 100) → use avg_score; N>1 → use EigenTrust
+            _rep_score   = _avg_score if (_n_agents <= 1 or not _et_score) else _et_score
             tel_caps = {
-                "tasks_performed":      tel.get("tasks_performed", 0),
-                "usage_count":          tel.get("usage_count", 0),
-                "avg_response_time":    tel.get("avg_response_time"),
-                "task_completion_rate": tel.get("task_completion_rate"),
-                "uptime":               tel.get("uptime"),
-                "monthly_tasks":        tel.get("monthly_tasks", [0] * 12),
-                "weekly_success":       tel.get("weekly_success", [0] * 7),
-                "success_rate":         tel.get("success_rate", 0.0),
-                "reputation_score":     (
-                    get_latest_eigentrust_score(token_id)
-                    or tel.get("reputation_score", 0.0)
-                ),
-                "last_active":          tel.get("last_active"),
+                "tasks_performed":   agent_score.get("totalTasks", 0) if agent_score else 0,
+                "avg_response_time": tel.get("avg_response_time"),
+                "success_rate":      round(_avg_score / 100.0, 4),
+                "reputation_score":  _rep_score,
+                "monthly_tasks":     _hist.get("monthly_tasks", [0]*12),
+                "weekly_success":    _hist.get("weekly_success", [0.0]*7),
             }
             if reg_file:
                 caps = dict(reg_file.capabilities)
@@ -302,7 +296,7 @@ async def restore_from_db() -> None:
                 agent_type=AgentType.JUDGE if agent_type_v == 1 else AgentType.PROVIDER,
                 status=AgentStatus(status) if status in _valid_statuses else AgentStatus.ACTIVE,
                 owner_address=owner,
-                ipfs_cid=ipfs_cid,
+                ipfs_cid=agent_uri[len("ipfs://"):] if agent_uri and agent_uri.startswith("ipfs://") else None,
                 agent_uri=agent_uri,
                 metadata_hash=None,
                 docker_image=(
@@ -353,16 +347,11 @@ def _apply_edit_to_manifest(
 
 
 def _persist_edit(
-    agent_id: str,
     rid: str,
     req: "AgentEditRequest",
     new_file: "AgentRegistrationFile | None",
-    new_cid: str | None,
-    upsert_fn,
 ) -> None:
-    """Update IPFS CID in DB and refresh the in-memory cache (identity is in IPFS)."""
-    if new_cid:
-        upsert_fn(agent_id=agent_id, ipfs_cid=new_cid)
+    """Refresh the in-memory cache after IPFS update (CID comes from agentURI on-chain)."""
     if rid in _records:
         mem: dict = {"updated_at": datetime.now(timezone.utc)}
         if req.name           is not None: mem["name"]             = req.name
@@ -388,8 +377,7 @@ class AgentService:
         The agent does NOT appear in _records / list_all() until the indexer
         confirms AgentCreated.  This is the correct ERC-8004 behaviour.
         """
-        from app.db.identity_repo import get_agent_identity, upsert_agent_identity
-        from app.db.telemetry_repo import upsert_telemetry
+        from app.repo.identity_repo import get_agent_identity, upsert_agent_identity
 
         if req.agent_id in _agent_index or get_agent_identity(req.agent_id):
             raise ValueError(f"agentId '{req.agent_id}' deja utilise.")
@@ -411,17 +399,7 @@ class AgentService:
         endpoint = register_agent_endpoint(req.agent_id)
 
         # ── 4. DB: slim pending marker — identity lives in IPFS ──────────────
-        upsert_agent_identity(
-            agent_id=req.agent_id,
-            ipfs_cid=cid,
-            status="pending_signature",
-        )
-        upsert_telemetry(
-            req.agent_id,
-            tasks_performed=0, usage_count=0,
-            monthly_tasks=[0]*12, weekly_success=[0]*7,
-            reputation_score=0.0, success_rate=0.0,
-        )
+        upsert_agent_identity(agent_id=req.agent_id)
         # Pre-populate cache as pending so /confirm can find the record
         try:
             record = AgentRecord(
@@ -478,6 +456,20 @@ class AgentService:
         record         = _records[body.registration_id]
         agent_registry = f"eip155:{settings.chain_id}:{settings.identity_registry_address}"
 
+        # Vérifier enregistrement on-chain — IdentityRegistry.isActive() direct RPC
+        if settings.identity_registry_address and settings.rpc_url:
+            try:
+                from web3 import Web3 as _W3
+                _w3 = _W3(_W3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 5}))
+                from app.core.abis import IDENTITY_REGISTRY_ABI as _ir_abi
+                _ir = _w3.eth.contract(address=_W3.to_checksum_address(settings.identity_registry_address), abi=_ir_abi)
+                if not _ir.functions.isActive(record.agent_id).call():
+                    raise ValueError(f"Agent '{record.agent_id}' non actif on-chain — transaction non confirmée")
+            except ValueError:
+                raise
+            except Exception as e:
+                logger.warning("isActive check échoué (non-bloquant): %s", e)
+
         # ── Résoudre le digest SHA256 — préserver le tag original ─────────
         if record.docker_image and "@sha256:" not in record.docker_image:
             original_image = record.docker_image  # ex: "strategy-agent:v1"
@@ -517,12 +509,20 @@ class AgentService:
                 "registration_file": updated_file,
             })
 
+        # tx receipt confirmé → tokenId reçu = agent enregistré on-chain
+        # PROVIDER → actif directement, JUGE → en attente du honeypot
+        final_status = (
+            AgentStatus.PENDING_VALIDATION
+            if record.agent_type == AgentType.JUDGE
+            else AgentStatus.ACTIVE
+        )
+
         endpoint = register_agent_endpoint(record.agent_id)
         record   = record.model_copy(update={
             "current_token_id":  body.token_id,
             "agent_registry":    agent_registry,
             "tx_hash":           body.tx_hash,
-            "status":            AgentStatus.PENDING_INDEX,
+            "status":            final_status,
             "platform_endpoint": endpoint,
             "registered_at":     datetime.now(timezone.utc),
             "updated_at":        datetime.now(timezone.utc),
@@ -534,8 +534,12 @@ class AgentService:
             )],
         })
         _records[body.registration_id] = record
-        self._persist_record(record)
-        # Embedding calculé dans /status quand The Graph confirme ACTIVE
+
+        from app.repo.identity_repo import upsert_agent_identity
+        upsert_agent_identity(
+            agent_id=record.agent_id,
+            registration_status=final_status.value,
+        )
         return record
 
     async def new_version(self, req: AgentNewVersionRequest) -> AgentNewVersionResponse:
@@ -546,7 +550,7 @@ class AgentService:
           3. blockchain.mint_new_version() ← SOURCE DE VERITE
           4. DB: pending_version marker (indexer fills token_id on AgentVersionMinted)
         """
-        from app.db.identity_repo import get_agent_identity, upsert_agent_identity
+        from app.repo.identity_repo import get_agent_identity, upsert_agent_identity
 
         row = get_agent_identity(req.agent_id)
         if not row:
@@ -598,11 +602,7 @@ class AgentService:
         unsigned_tx = _build_version_tx(req.agent_id, new_uri, req.new_version)
 
         # ── DB: slim pending marker ───────────────────────────────────────
-        upsert_agent_identity(
-            agent_id=req.agent_id,
-            ipfs_cid=new_cid,
-            status="pending_signature",
-        )
+        upsert_agent_identity(agent_id=req.agent_id)
         return AgentNewVersionResponse(
             registration_id=rid, agent_id=req.agent_id,
             new_version=req.new_version, new_ipfs_cid=new_cid,
@@ -618,13 +618,13 @@ class AgentService:
         Flow:
           1. Build updated manifest from current identity_metadata
           2. IPFS upload → new CID  (IPFS toujours mis à jour)
-          3. DB: nouveau ipfs_cid + identity_metadata (même token_id, même agent_uri on-chain)
+          3. _records mis à jour (même token_id, même agent_uri on-chain)
           4. _records mis à jour immédiatement (pas besoin d'attendre l'indexer)
 
         Le smart contract garde le même URI on-chain.
         La prochaine new_version() inclura ces changements dans son manifest IPFS.
         """
-        from app.db.identity_repo import get_agent_identity, upsert_agent_identity
+        from app.repo.identity_repo import get_agent_identity
 
         row = get_agent_identity(agent_id)
         if not row:
@@ -646,7 +646,7 @@ class AgentService:
             logger.info("IPFS edit %s → nouveau cid=%s", agent_id, new_cid)
 
         # ── DB + _records ─────────────────────────────────────────────────
-        _persist_edit(agent_id, rid, req, new_file, new_cid, upsert_agent_identity)
+        _persist_edit(rid, req, new_file)
 
         updated_fields = [k for k in ("name", "description", "readme", "price_per_task")
                           if getattr(req, k) is not None]
@@ -658,106 +658,34 @@ class AgentService:
             raise KeyError(agent_id)
         return _records[_agent_index[agent_id]]
 
-    def update_run_metrics(self, agent_id: str, *, success: bool, duration_sec: float | None = None) -> None:
+    def update_run_metrics(self, agent_id: str, *, duration_sec: float | None = None) -> None:
         """
-        Increment usage counters after every run. Called from the /run endpoint.
-        Writes to agent_telemetry (telemetry zone) only — never touches identity.
+        Met à jour avg_response_time après chaque exécution sandbox.
+        tasks_performed et last_active → dérivables depuis ScoreRecorded (The Graph).
         """
-        from app.db.telemetry_repo import get_telemetry, upsert_telemetry
+        if not duration_sec:
+            return
+        from app.repo.telemetry_repo import get_telemetry, upsert_telemetry
 
-        tel = get_telemetry(agent_id) or {}
-        n   = int(tel.get("tasks_performed") or 0) + 1
-        now = datetime.now(timezone.utc)
+        tel     = get_telemetry(agent_id) or {}
+        prev    = float(tel.get("avg_response_time") or 0)
+        new_avg = round((prev + duration_sec) / 2, 2) if prev else round(duration_sec, 2)
 
-        # Rolling average response time
-        prev_avg = float(tel.get("avg_response_time") or 0)
-        new_avg  = round((prev_avg * (n - 1) + (duration_sec or 0)) / n, 2) if duration_sec else prev_avg
+        upsert_telemetry(agent_id, avg_response_time=new_avg)
+        _refresh_record_telemetry(agent_id, {"avg_response_time": new_avg})
+        logger.debug("Telemetry updated for %s: avg=%.2fs", agent_id, new_avg)
 
-        # Rolling task_completion_rate
-        prev_rate = float(tel.get("task_completion_rate") or 0)
-        prev_ok   = round(prev_rate * (n - 1) / 100)
-        new_rate  = round((prev_ok + (1 if success else 0)) * 100 / n, 1)
-
-        # Monthly task volume (rolling 12 months)
-        monthly = list(tel.get("monthly_tasks") or [0]*12)
-        if len(monthly) != 12:
-            monthly = [0]*12
-        monthly[now.month - 1] += 1
-
-        # Weekly success rate snapshot (rolling 7 days)
-        weekly = list(tel.get("weekly_success") or [0]*7)
-        if len(weekly) != 7:
-            weekly = [0]*7
-        weekly[now.weekday()] = new_rate
-
-        new_usage = int(tel.get("usage_count") or 0) + 1
-        upsert_telemetry(
-            agent_id,
-            tasks_performed=n,
-            usage_count=new_usage,
-            avg_response_time=new_avg,
-            task_completion_rate=new_rate,
-            last_active=now.isoformat(),
-            monthly_tasks=monthly,
-            weekly_success=weekly,
-        )
-        _refresh_record_telemetry(agent_id, {
-            "tasks_performed":      n,
-            "usage_count":          new_usage,
-            "avg_response_time":    new_avg,
-            "task_completion_rate": new_rate,
-            "last_active":          now.isoformat(),
-            "monthly_tasks":        monthly,
-            "weekly_success":       weekly,
-        })
-        logger.debug("Telemetry updated for %s: tasks=%d avg=%.2fs rate=%.1f%%",
-                     agent_id, n, new_avg, new_rate)
-
-    def update_validation_metrics(self, agent_id: str, *, verdict: str, score: float) -> None:
+    def update_validation_metrics(self, agent_id: str, *, score: float) -> None:
         """
-        Update reputation after a validation completes.
-        Writes to agent_telemetry only.
-        Collaboration scores are on-chain (record_pipeline_scores) → indexed by The Graph.
+        Score de validation — ancré on-chain via ScoreRecorded.
+        Aucune écriture en DB nécessaire ici.
         """
-        from app.db.telemetry_repo import get_telemetry, upsert_telemetry
-
-        tel       = get_telemetry(agent_id) or {}
-        val_count = int(tel.get("val_count") or 0) + 1
-        is_valid  = verdict == "VALID"
-
-        prev_rate = float(tel.get("success_rate") or 0)
-        prev_ok   = round(prev_rate * (val_count - 1) / 100)
-        new_rate  = round((prev_ok + (1 if is_valid else 0)) * 100 / val_count, 1)
-        new_rep   = round(new_rate * 0.6 + score * 0.4)
-
-        weekly = list(tel.get("weekly_success") or [0]*7)
-        if len(weekly) != 7:
-            weekly = [0]*7
-        weekly[datetime.now(timezone.utc).weekday()] = new_rate
-
-        upsert_telemetry(
-            agent_id,
-            success_rate=new_rate,
-            reputation_score=float(new_rep),
-            val_count=val_count,
-            weekly_success=weekly,
-        )
-        _refresh_record_telemetry(agent_id, {
-            "success_rate":     new_rate,
-            "reputation_score": float(new_rep),
-            "weekly_success":   weekly,
-        })
-        logger.info("Validation telemetry updated for %s: success_rate=%.1f%% rep=%d",
-                    agent_id, new_rate, new_rep)
+        logger.info("Validation completed for %s: score=%d (on-chain via ScoreRecorded)", agent_id, score)
 
     def _persist_record(self, record: AgentRecord) -> None:
-        """Sync slim identity fields to DB (identity lives in IPFS, telemetry is separate)."""
-        from app.db.identity_repo import upsert_agent_identity
-        upsert_agent_identity(
-            agent_id=record.agent_id,
-            ipfs_cid=record.ipfs_cid,
-            status=record.status.value,
-        )
+        """Persist agent_id in agent_embeddings so the row exists for embedding lookup."""
+        from app.repo.identity_repo import upsert_agent_identity
+        upsert_agent_identity(agent_id=record.agent_id)
 
     async def list_by_owner(self, address: str) -> list[AgentRecord]:
         results = [r for r in _records.values()

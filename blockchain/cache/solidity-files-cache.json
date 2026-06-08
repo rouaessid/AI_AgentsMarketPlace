@@ -115,8 +115,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\StakingContract.sol": {
-      "lastModificationDate": 1777027489576,
-      "contentHash": "600fe8a554a34762b9f94cdef7683691",
+      "lastModificationDate": 1780488916343,
+      "contentHash": "3ad611b25dc6a7d361b56a9a2e706faa",
       "sourceName": "contracts/StakingContract.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -155,8 +155,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\IdentityRegistry.sol": {
-      "lastModificationDate": 1776600950605,
-      "contentHash": "e8b39da154f2dc44ba5445d352ea396f",
+      "lastModificationDate": 1780488983536,
+      "contentHash": "7eee0175f3018373017a4ade439d0bf9",
       "sourceName": "contracts/IdentityRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1135,8 +1135,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\ValidationRegistry.sol": {
-      "lastModificationDate": 1779652005920,
-      "contentHash": "528dcd3bfe73e35edad24632e72aa38a",
+      "lastModificationDate": 1780776417267,
+      "contentHash": "cb0060d29a7f36d0a371ddbf9a592758",
       "sourceName": "contracts/ValidationRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1173,7 +1173,6 @@
       "artifacts": [
         "IEscrowManager",
         "IIdentityRegistry",
-        "IReputationRegistry",
         "IStakingContract",
         "ValidationRegistry"
       ]
@@ -1219,8 +1218,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\EscrowManager.sol": {
-      "lastModificationDate": 1777481403885,
-      "contentHash": "d97e5b99f60d76e35aece8d0b63d34f2",
+      "lastModificationDate": 1780488886671,
+      "contentHash": "5b48a074943e03c2de9cadd8fffa8439",
       "sourceName": "contracts/EscrowManager.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1260,8 +1259,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\ReputationRegistry.sol": {
-      "lastModificationDate": 1776680473316,
-      "contentHash": "e9b2cefc06e60a88793fa7ed6c9de904",
+      "lastModificationDate": 1780761300575,
+      "contentHash": "f768e4a1b807db9c58ff5f36e2270dd6",
       "sourceName": "contracts/ReputationRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",

@@ -1,61 +1,59 @@
 """
 identity_repo.py — CRUD for agent_embeddings table + in-memory cache facade.
 
-DB (agent_embeddings): agent_id, capability_embedding, ipfs_cid, status
-Rich identity data (name, docker_image, price, token_id, owner...):
-  → fetched from IPFS at startup, cached in agent_service._records
-  → accessible via get_agent_identity() which reads the in-memory cache
+DB (agent_embeddings): agent_id, capability_embedding
+Status et agentURI viennent de The Graph :
+  - agent absent du Graph  →  en cours d'enregistrement (pending)
+  - agent présent du Graph →  actif
 """
 from __future__ import annotations
 import logging
 from typing import Any
 
-from app.db.database import AgentEmbedding, get_session
+from app.db.database import get_session
+from app.entities.agent import AgentEmbedding
 
 logger = logging.getLogger(__name__)
 
 
-# ── DB writes (agent_embeddings table only) ───────────────────────────────────
+def _cid_from_uri(agent_uri: str | None) -> str | None:
+    """Extrait le CID IPFS depuis agentURI ('ipfs://Qm...' → 'Qm...')."""
+    if agent_uri and agent_uri.startswith("ipfs://"):
+        return agent_uri[len("ipfs://"):]
+    return None
+
+
+# ── DB writes ─────────────────────────────────────────────────────────────────
 
 def upsert_agent_identity(*, agent_id: str, **fields) -> None:
     """
-    Insert or update a row in agent_embeddings.
-    Only persists: capability_embedding, ipfs_cid, status.
-    All other fields go to IPFS manifest (already uploaded before this call).
+    Insère ou met à jour une ligne dans agent_embeddings.
+    Seul capability_embedding est persisté ici.
+    Status et ipfs_cid viennent de The Graph.
     """
-    allowed = {"capability_embedding", "ipfs_cid", "status"}
+    allowed  = {"capability_embedding", "registration_status"}
     db_fields = {k: v for k, v in fields.items() if k in allowed}
-    db_fields.setdefault("status", "pending_signature")
 
     with get_session() as s:
         existing = s.get(AgentEmbedding, agent_id)
         if existing:
             for k, v in db_fields.items():
-                if v is not None or k == "status":
+                if v is not None:
                     setattr(existing, k, v)
         else:
             s.add(AgentEmbedding(agent_id=agent_id, **db_fields))
         s.commit()
-    logger.debug("identity_repo upsert: %s status=%s", agent_id, db_fields.get("status"))
-
-
-def update_agent_status(agent_id: str, status: str) -> None:
-    with get_session() as s:
-        row = s.get(AgentEmbedding, agent_id)
-        if row:
-            row.status = status
-            s.commit()
+    logger.debug("identity_repo upsert: %s", agent_id)
 
 
 def get_all_embeddings() -> list[dict[str, Any]]:
-    """Return raw DB rows (agent_id, capability_embedding, ipfs_cid, status)."""
+    """Retourne [{agent_id, capability_embedding, registration_status}] pour tous les agents en DB."""
     with get_session() as s:
         return [
             {
                 "agent_id":             r.agent_id,
                 "capability_embedding": r.capability_embedding,
-                "ipfs_cid":             r.ipfs_cid,
-                "status":               r.status,
+                "registration_status":  r.registration_status,
             }
             for r in s.query(AgentEmbedding).all()
         ]
@@ -67,8 +65,7 @@ def get_embedding(agent_id: str) -> str | None:
         return row.capability_embedding if row else None
 
 
-# ── In-memory cache facade (rich identity data) ───────────────────────────────
-# These functions read from agent_service._records (populated at startup from IPFS)
+# ── In-memory cache facade ────────────────────────────────────────────────────
 
 def get_agent_identity(agent_id: str) -> dict[str, Any] | None:
     from app.services.agent_service import get_agent_from_cache

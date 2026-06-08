@@ -1,0 +1,129 @@
+@startuml
+title Enregistrement d'un Agent (vue simplifiee)
+
+skinparam sequenceMessageAlign left
+skinparam backgroundColor white
+skinparam defaultFontSize 9
+skinparam ParticipantPadding 5
+skinparam BoxPadding 3
+skinparam sequenceArrowThickness 1
+skinparam sequenceDividerFontSize 9
+skinparam sequenceDividerBackgroundColor #EEEEEE
+skinparam SequenceGroupBodyBackgroundColor transparent
+skinparam sequenceGroupBorderThickness 1
+
+scale 0.8
+
+autonumber
+
+actor       "Vendeur"        as Seller
+participant "Frontend"       as Client
+participant "MetaMask"       as MM   #Orange
+participant "Backend"        as API
+database    "PostgreSQL"     as DB
+participant "IPFS"           as IPFS
+participant "IdentityReg."   as IR   #LightBlue
+participant "StakingContract" as SC  #LightBlue
+
+== Soumission ==
+
+Seller  ->  Client : soumettreFormulaire()
+activate Client
+
+Client  ->  API    : enregistrerAgent(agentData)
+activate API
+
+API     ->  IPFS   : uploadMetadonnees()
+activate IPFS
+IPFS   -->  API    : agentURI
+deactivate IPFS
+
+API     ->  DB     : creerAgent(agentId)
+activate DB
+DB     -->  API    : ok
+deactivate DB
+
+API    -->  Client : unsignedTx(registrationId)
+deactivate API
+deactivate Client
+
+== Identite sur la blockchain ==
+
+Seller  ->  Client : confirmerSignature()
+activate Client
+
+Client  ->  MM     : signerEtEnvoyer(tx)
+activate MM
+
+MM     ->>  Seller : demanderApprobation()
+Seller -->  MM     : approuve
+
+MM      ->  IR     : register(agentId, agentType)
+activate IR
+IR     ->  IR     : emit AgentCreated(tokenId)
+IR     -->  MM     : txHash
+deactivate IR
+
+MM     -->  Client : transactionConfirmee(txHash, tokenId)
+
+note over IR : The Graph lit les logs\nde la blockchain (async)\net indexe AgentCreated
+deactivate MM
+deactivate Client
+
+== Mise en jeu ==
+
+Seller  ->  Client : confirmerStake()
+activate Client
+
+Client  ->  MM     : signerEtEnvoyer(stakeTx)
+activate MM
+
+MM     ->>  Seller : demanderApprobation()
+Seller -->  MM     : approuve
+
+MM      ->  SC     : stake()
+activate SC
+SC     ->  SC     : emit Staked(montant)
+SC     -->  MM     : txHash
+deactivate SC
+
+MM     -->  Client : stakeConfirme
+
+note over SC : The Graph lit les logs\nde la blockchain (async)\net indexe Staked
+deactivate MM
+
+== Activation ==
+
+Client  ->  API    : confirmer(txHash, tokenId)
+activate API
+
+alt PROVIDER
+    API  ->  DB  : mettreAJourStatut(actif)
+    activate DB
+    DB   -->  API : ok
+    deactivate DB
+    API  -->  Client : agentActif
+    deactivate API
+    Client  ->  Seller : dashboard(badge=actif)
+
+else JUGE
+    API  ->  DB  : mettreAJourStatut(enAttenteTest)
+    activate DB
+    DB   -->  API : ok
+    deactivate DB
+    API  ->>  API : lancerTestTechnique() [fond]
+    activate API
+    deactivate API
+    API  -->  Client : enAttenteDuTest
+    deactivate API
+    Client  ->  Seller : dashboard(badge=enAttenteValidation)
+    note over API
+      Honeypot : le container du juge evalue
+      une trace d'execution pour valider
+      ses capacites avant d'etre actif.
+    end note
+end
+
+deactivate Client
+
+@enduml

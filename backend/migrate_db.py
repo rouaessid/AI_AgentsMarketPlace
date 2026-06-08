@@ -52,7 +52,6 @@ else:
 new_cols = [
     ("block_number",    "INTEGER"),
     ("agent_uri",       "TEXT"),
-    ("ipfs_cid",        "TEXT"),
     ("name",            "TEXT"),
     ("version",         "TEXT"),
     ("price_per_task",  "REAL DEFAULT 0.0"),
@@ -89,10 +88,7 @@ CREATE TABLE IF NOT EXISTS agent_telemetry (
     uptime               REAL,
     last_active          TEXT,
     monthly_tasks_json   TEXT,
-    weekly_success_json  TEXT,
-    reputation_score     REAL DEFAULT 0.0,
-    success_rate         REAL DEFAULT 0.0,
-    val_count            INTEGER NOT NULL DEFAULT 0
+    weekly_success_json  TEXT
 )""")
 
 cur.execute("""
@@ -166,8 +162,8 @@ for row in agents:
     if not exists:
         cur.execute("""
             INSERT INTO agent_telemetry (agent_id, tasks_performed, usage_count,
-                monthly_tasks_json, weekly_success_json, reputation_score, success_rate)
-            VALUES (?, 0, 0, ?, ?, 0.0, 0.0)
+                monthly_tasks_json, weekly_success_json)
+            VALUES (?, 0, 0, ?, ?)
         """, (aid, json.dumps([0]*12), json.dumps([0]*7)))
         print(f"[MIGRATE] ✓ seeded agent_telemetry for {aid}")
 

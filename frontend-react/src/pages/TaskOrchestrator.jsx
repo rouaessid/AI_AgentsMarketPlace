@@ -370,6 +370,55 @@ function PackOverviewTab({ pack, agents, subtasks, apiKeys, setApiKeys, required
   )
 }
 
+function AgentFeedbackInline({ agentId }) {
+  const [stars,   setStars]   = useState(0)
+  const [hover,   setHover]   = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [done,    setDone]    = useState(false)
+  const [error,   setError]   = useState('')
+
+  if (done) return (
+    <div className="flex items-center gap-1.5 text-xs text-emerald-600 mt-2">
+      <CheckCircle size={11} /> Avis soumis ✓
+    </div>
+  )
+  return (
+    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-am-border">
+      <span className="text-xs text-am-muted">Votre avis :</span>
+      {[1,2,3,4,5].map(s => (
+        <button key={s} onClick={() => setStars(s)}
+          onMouseEnter={() => setHover(s)} onMouseLeave={() => setHover(0)}
+          className="text-lg focus:outline-none">
+          <span style={{ color: s <= (hover || stars) ? '#f59e0b' : '#cbd5e1' }}>★</span>
+        </button>
+      ))}
+      {stars > 0 && (
+        <button onClick={async () => {
+          setLoading(true); setError('')
+          try {
+            if (!window.ethereum) throw new Error('MetaMask requis')
+            const info = await agentApi.getFeedbackInfo(agentId, stars)
+            if (!info.reputation_address || info.call_data === '0x')
+              throw new Error('Contrat non configuré')
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+            const txHash = await window.ethereum.request({
+              method: 'eth_sendTransaction',
+              params: [{ from: accounts[0], to: info.reputation_address, data: info.call_data }],
+            })
+            await agentApi.notifyFeedback(agentId, { tx_hash: txHash, stars }).catch(() => {})
+            setDone(true)
+          } catch (e) { setError(e.message) }
+          finally { setLoading(false) }
+        }} disabled={loading}
+          className="text-xs px-2 py-0.5 rounded-full bg-am-indigo text-white disabled:opacity-50 ml-1">
+          {loading ? '...' : 'Envoyer'}
+        </button>
+      )}
+      {error && <span className="text-xs text-rose-500">{error}</span>}
+    </div>
+  )
+}
+
 function PackLiveTestTab({ agents, subtasks = [], steps, finalOutput, valTaskId, isExecuting, isValidating, isDone, isFailed, taskReady, onStartExecution, onRunAgain, apiKeys, setApiKeys, requiredKeys, validationResults = {} }) {
   return (
     <div className="space-y-5">
@@ -491,6 +540,7 @@ function PackLiveTestTab({ agents, subtasks = [], steps, finalOutput, valTaskId,
                   <span className="flex-1 truncate italic">{j.justification}</span>
                 </div>
               ))}
+              {!isValidating && <AgentFeedbackInline agentId={agentId} />}
             </div>
           ))}
         </motion.div>

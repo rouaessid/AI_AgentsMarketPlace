@@ -1,0 +1,29 @@
+@startuml
+title Protocole Commit-Reveal
+
+skinparam backgroundColor white
+skinparam defaultFontSize 10
+skinparam ArrowThickness 1
+
+start
+
+partition "Phase Commit [x3]" {
+  :hash = keccak256(vote, sel, scores);
+  :commitVote(taskId, judgeId, hash);
+  :VR stocke commitHash[taskId][judgeId];
+}
+
+partition "Phase Reveal [x3]" {
+  :revealVote(taskId, judgeId, vote, sel, scores);
+  if (keccak256(vote, sel, scores) == commitHash ?) then (oui)
+    :enregistrer vote;
+  else (non)
+    :revert hash invalide;
+  endif
+}
+
+:tous reveals reçus;
+:finaliseValidation();
+
+stop
+@enduml

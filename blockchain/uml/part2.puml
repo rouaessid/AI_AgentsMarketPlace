@@ -1,0 +1,77 @@
+@startuml
+title Enregistrement d'un Agent (2/2) - Mise en jeu et Activation
+
+skinparam sequenceMessageAlign left
+skinparam backgroundColor white
+skinparam defaultFontSize 10
+skinparam sequenceArrowThickness 1
+skinparam sequenceDividerFontSize 10
+
+autonumber 15
+
+actor       "Vendeur"         as Seller
+participant "Frontend"        as Client
+participant "MetaMask"        as MM   #Orange
+participant "Backend"         as API
+database    "PostgreSQL"      as DB
+participant "StakingContract" as SC   #LightBlue
+
+== Mise en jeu ==
+
+Seller  ->  Client : confirmerStake()
+activate Client
+
+Client  ->  MM     : signerEtEnvoyer(stakeTx)
+activate MM
+
+MM     ->>  Seller : demanderApprobation()
+Seller -->  MM     : approuve
+
+MM      ->  SC     : stake()
+activate SC
+SC     ->  SC     : emit Staked(montant)
+activate SC
+deactivate SC
+SC     -->  MM     : txHash
+deactivate SC
+
+MM     -->  Client : stakeConfirme
+deactivate MM
+
+note over SC : The Graph lit les logs\nde la blockchain (async)\net indexe Staked
+
+== Activation ==
+
+Client  ->  API    : confirmer(txHash, tokenId)
+activate API
+
+alt PROVIDER
+    API  ->  DB  : mettreAJourStatut(actif)
+    activate DB
+    DB   -->  API : ok
+    deactivate DB
+    API  -->  Client : agentActif
+    deactivate API
+    Client  ->  Seller : dashboard(badge=actif)
+
+else JUGE
+    API  ->  DB  : mettreAJourStatut(enAttenteTest)
+    activate DB
+    DB   -->  API : ok
+    deactivate DB
+    API  ->>  API : lancerTestTechnique() [fond]
+    activate API
+    deactivate API
+    API  -->  Client : enAttenteDuTest
+    deactivate API
+    Client  ->  Seller : dashboard(badge=enAttenteValidation)
+    note over API
+      Honeypot : le container du juge evalue
+      une trace d'execution pour valider
+      ses capacites avant d'etre actif.
+    end note
+end
+
+deactivate Client
+
+@enduml

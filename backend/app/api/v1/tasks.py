@@ -1,4 +1,4 @@
-"""
+﻿"""
 tasks.py — Task Orchestration API
 
 POST /tasks/plan-only           — Planner + matching, returns plan preview (no execution)
@@ -18,13 +18,17 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
-from app.db.pipeline_repo import (
+from app.repo.pipeline_repo import (
     create_pipeline_task,
     get_pipeline_task,
     list_pipeline_tasks,
     update_pipeline_task,
+)
+from app.models.task import (
+    RunTaskRequest, RunTaskResponse, PlanOnlyRequest, AlternativesRequest,
+    PurchaseInfoRequest, ExecuteRequest, PackProposalsRequest,
+    SelectPackRequest, ConfirmAccessRequest,
 )
 from app.services.matching_service import select_agents, COSINE_WEIGHT, EIGENTRUST_WEIGHT
 from app.services.planner_service import decompose_task, decompose_task_alternatives
@@ -61,29 +65,14 @@ async def _run_planner_and_matching(prompt: str):
         raise HTTPException(503, detail=f"Planner indisponible : {exc}")
 
     try:
-        from app.services.eigentrust_service import compute_eigentrust
-        from app.db.identity_repo import get_all_agent_identities
-        from app.services.graph_client import get_solo_scores, get_pipeline_scores
+        from app.repo.identity_repo import get_all_agent_identities
+        from app.services.graph_client import get_eigentrust_score
 
         all_ids = get_all_agent_identities()
-        agents  = [
-            {"agent_id": r["agent_id"], "token_id": r["current_token_id"]}
+        trust_scores = {
+            r["agent_id"]: (get_eigentrust_score(r["current_token_id"]) or 0.0)
             for r in all_ids
             if r.get("current_token_id") and r.get("agent_type", 0) != 1
-        ]
-        p_overrides = {}
-        for a in agents:
-            scores = get_solo_scores(a["agent_id"]) or get_pipeline_scores(a["agent_id"])
-            if scores:
-                nonzero = [s for s in scores if s > 0]
-                recent  = nonzero[-5:] if nonzero else []
-                if recent:
-                    p_overrides[a["agent_id"]] = sum(recent) / len(recent)
-
-        et_result    = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
-        trust_scores = {
-            aid: et_result.scores_by_agent[aid]["global_trust"]
-            for aid in et_result.scores_by_agent
         }
         matches = select_agents(plan.subtasks, trust_scores)
     except Exception as exc:
@@ -98,7 +87,7 @@ async def _run_planner_and_matching(prompt: str):
 
 def _enrich_matches(matches: list) -> list[dict]:
     """Enrich each AgentMatch with agent metadata (name, price, wallet, description)."""
-    from app.db.identity_repo import get_agent_identity
+    from app.repo.identity_repo import get_agent_identity
     enriched = []
     for m in matches:
         identity = get_agent_identity(m.agent_id) or {}
@@ -165,19 +154,10 @@ def _onchain_prices_wei(agent_ids: list[str]) -> list[int] | None:
         w3 = Web3(Web3.HTTPProvider(s.rpc_url, request_kwargs={"timeout": 5}))
         if not w3.is_connected():
             return None
-        _abi = [
-            {"inputs": [{"name": "agentId_", "type": "string"}],
-             "name": "isActive",
-             "outputs": [{"name": "", "type": "bool"}],
-             "stateMutability": "view", "type": "function"},
-            {"inputs": [{"name": "agentId_", "type": "string"}],
-             "name": "getPricePerTask",
-             "outputs": [{"name": "", "type": "uint256"}],
-             "stateMutability": "view", "type": "function"},
-        ]
+        from app.core.abis import IDENTITY_REGISTRY_ABI as _ir_abi
         ir = w3.eth.contract(
             address=Web3.to_checksum_address(s.identity_registry_address),
-            abi=_abi,
+            abi=_ir_abi,
         )
         prices = []
         for aid in agent_ids:
@@ -249,69 +229,6 @@ async def _execute_and_track(task_id: str, plan_obj, matches: list, prompt: str,
         update_pipeline_task(task_id, status="failed")
 
 
-# ── Request / Response models ─────────────────────────────────────────────────
-
-class RunTaskRequest(BaseModel):
-    prompt:       str
-    buyer_wallet: str = ""
-    agent_params: dict = {}
-
-
-class RunTaskResponse(BaseModel):
-    task_id: str
-    mode:    str
-    plan:    dict
-    agents:  list[dict]
-    status:  str
-
-
-class PlanOnlyRequest(BaseModel):
-    prompt:       str
-    buyer_wallet: str = ""
-
-
-class AlternativesRequest(BaseModel):
-    subtask_description: str
-    excluded_agent_ids:  list[str] = []
-    limit:               int = 5
-
-
-class PurchaseInfoRequest(BaseModel):
-    task_id: str
-
-
-class ExecuteRequest(BaseModel):
-    task_id:      str
-    # Optional: provided when coming from the select-pack flow (task not pre-stored in DB)
-    prompt:       str = ""
-    mode:         str = "pipeline"
-    subtasks:     list[dict] = []
-    agents:       list[dict] = []
-    buyer_wallet: str = ""
-    agent_params: dict = {}
-
-
-class PackProposalsRequest(BaseModel):
-    prompt:       str
-    buyer_wallet: str = ""
-
-
-class SelectPackRequest(BaseModel):
-    pack_id:      str
-    prompt:       str
-    mode:         str
-    reasoning:    str = ""
-    subtasks:     list[dict]
-    agents:       list[dict]  # enriched agent dicts from the selected pack
-    buyer_wallet: str = ""
-    pack_name:    str = ""
-
-
-class ConfirmAccessRequest(BaseModel):
-    buyer_wallet: str
-    tx_hash:      str = ""
-
-
 # ── Helpers for pack proposals ───────────────────────────────────────────────
 
 def _enrich_stored_agents(agents_json: str | list | None) -> list[dict]:
@@ -322,7 +239,7 @@ def _enrich_stored_agents(agents_json: str | list | None) -> list[dict]:
     except Exception:
         return []
     
-    from app.db.identity_repo import get_agent_identity
+    from app.repo.identity_repo import get_agent_identity
     enriched = []
     for a in agents:
         agent_id = a.get("agent_id")
@@ -407,7 +324,8 @@ def _repair_stale_pipeline_validation(task: dict) -> dict:
     if task.get("status") != "validating":
         return task
 
-    from app.db import access_repo
+    from app.repo import access_repo
+    from app.services.judge_service import _read_onchain_verdict
 
     now = datetime.now(timezone.utc)
     changed = False
@@ -418,40 +336,23 @@ def _repair_stale_pipeline_validation(task: dict) -> dict:
         expected_val_task_id = _expected_pipeline_val_task_id(task["id"], aid)
         session = access_repo.get_validation_session(aid) or {}
         belongs_to_task = session.get("val_task_id") == expected_val_task_id
-        status = session.get("status") if belongs_to_task else None
+        vt_id = session.get("val_task_id") if belongs_to_task else expected_val_task_id
 
-        if status in _VALIDATION_TERMINAL_STATUSES:
+        # On-chain verdict present → task is finalised, count as terminal
+        onchain_verdict = _read_onchain_verdict(vt_id) if vt_id else None
+        if onchain_verdict is not None:
             terminal_count += 1
             continue
 
+        # No verdict yet — skip if still within the stale window
         started_at = _parse_iso_datetime(session.get("started_at") if belongs_to_task else None)
         created_at = _parse_iso_datetime(task.get("created_at")) or now
         age_anchor = started_at or created_at
         if now - age_anchor < _STALE_VALIDATION_AFTER:
             continue
 
-        verdicts = access_repo.get_judge_verdicts(aid) if belongs_to_task else []
-        if not verdicts:
-            access_repo.insert_judge_verdict(
-                agent_id=aid,
-                judge_id="validation-timeout",
-                judge_name="Validation Timeout",
-                score=0,
-                justification=(
-                    "Judge validation was interrupted or exceeded the backend timeout. "
-                    "No judge container result was recorded."
-                ),
-                verdict="INVALID",
-            )
-
-        access_repo.upsert_validation_session(
-            aid,
-            val_task_id=expected_val_task_id,
-            status="failed",
-            consensus_verdict="INVALID",
-            aggregated_score=0,
-            finished_at=now.isoformat(),
-        )
+        # Stale with no on-chain result → clear the session and mark terminal
+        access_repo.upsert_validation_session(aid, val_task_id=expected_val_task_id)
         terminal_count += 1
         changed = True
         logger.warning("Marked stale pipeline validation failed: task=%s agent=%s", task["id"], aid)
@@ -467,8 +368,13 @@ def _repair_stale_pipeline_validation(task: dict) -> dict:
 
 
 def _pipeline_validation_results(task: dict) -> dict:
-    """Return per-agent judge validation state for a pipeline status response."""
-    from app.db import access_repo
+    """Return per-agent validation state for a pipeline status response."""
+    from app.repo import access_repo
+    from app.services.judge_service import _read_onchain_verdict
+    from app.services.graph_client import get_agent_score, get_validation_response
+
+    # failed → task never reached blockchain, skip RPC entirely
+    is_failed = task.get("status") == "failed"
 
     agent_ids = _pipeline_agent_ids(task)
 
@@ -477,28 +383,24 @@ def _pipeline_validation_results(task: dict) -> dict:
         expected_val_task_id = _expected_pipeline_val_task_id(task["id"], aid)
         session = access_repo.get_validation_session(aid) or {}
         belongs_to_task = session.get("val_task_id") == expected_val_task_id
-        verdicts = access_repo.get_judge_verdicts(aid) if belongs_to_task else []
-        # Drop stale timeout entries if real judge verdicts also exist
-        real = [v for v in verdicts if v["judge_id"] != "validation-timeout"]
-        if real:
-            verdicts = real
+        vt_id = session.get("val_task_id") if belongs_to_task else expected_val_task_id
+
+        if is_failed:
+            onchain_verdict = None
+            response_uri    = None
+        else:
+            onchain_verdict = _read_onchain_verdict(vt_id) if vt_id else None
+            response_uri    = get_validation_response(vt_id) if vt_id else None
+
+        agent_score = get_agent_score(aid)
+
         results[aid] = {
-            "status": session.get("status") if belongs_to_task else "not_started",
-            "val_task_id": session.get("val_task_id") if belongs_to_task else expected_val_task_id,
-            "consensus_verdict": session.get("consensus_verdict") if belongs_to_task else None,
-            "aggregated_score": session.get("aggregated_score") if belongs_to_task else None,
-            "started_at": session.get("started_at") if belongs_to_task else None,
-            "finished_at": session.get("finished_at") if belongs_to_task else None,
-            "judges": [
-                {
-                    "judge_id": v["judge_id"],
-                    "judge_name": v["judge_name"],
-                    "score": v["score"],
-                    "verdict": v["verdict"],
-                    "justification": v["justification"],
-                }
-                for v in verdicts
-            ],
+            "val_task_id":       vt_id,
+            "consensus_verdict": onchain_verdict,
+            "aggregated_score":  agent_score.get("averageScore") if agent_score else None,
+            "started_at":        session.get("started_at") if belongs_to_task else None,
+            "justification_uri": response_uri,
+            "judges":            [],
         }
     return results
 
@@ -567,30 +469,16 @@ async def pack_proposals(body: PackProposalsRequest) -> JSONResponse:
     if not body.prompt.strip():
         raise HTTPException(400, detail="prompt vide")
 
-    # Calcul trust scores (sans besoin du plan standard)
+    # Trust scores — eigenTrustScore direct RPC depuis blockchain
     try:
-        from app.services.eigentrust_service import compute_eigentrust
-        from app.db.identity_repo import get_all_agent_identities
-        from app.services.graph_client import get_solo_scores, get_pipeline_scores
+        from app.repo.identity_repo import get_all_agent_identities
+        from app.services.graph_client import get_eigentrust_score
 
         all_ids = get_all_agent_identities()
-        agents  = [
-            {"agent_id": r["agent_id"], "token_id": r["current_token_id"]}
+        trust_scores = {
+            r["agent_id"]: (get_eigentrust_score(r["current_token_id"]) or 0.0)
             for r in all_ids
             if r.get("current_token_id") and r.get("agent_type", 0) != 1
-        ]
-        p_overrides = {}
-        for a in agents:
-            scores = get_solo_scores(a["agent_id"]) or get_pipeline_scores(a["agent_id"])
-            if scores:
-                nonzero = [s for s in scores if s > 0]
-                recent  = nonzero[-5:] if nonzero else []
-                if recent:
-                    p_overrides[a["agent_id"]] = sum(recent) / len(recent)
-        et_result    = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
-        trust_scores = {
-            aid: et_result.scores_by_agent[aid]["global_trust"]
-            for aid in et_result.scores_by_agent
         }
     except Exception as exc:
         logger.warning("EigenTrust indisponible pour pack-proposals : %s", exc)
@@ -627,7 +515,6 @@ async def select_pack(body: SelectPackRequest) -> JSONResponse:
         task_id=task_id,
         task_prompt=body.prompt,
         mode=body.mode,
-        buyer_wallet=body.buyer_wallet,
     )
     subtasks_data = [
         {k: v for k, v in st.items() if k in ("id", "description", "domain", "depends_on", "complexity")}
@@ -670,14 +557,34 @@ async def confirm_pack_access(task_id: str, body: ConfirmAccessRequest) -> JSONR
     if not task:
         raise HTTPException(404, detail=f"Tâche {task_id!r} introuvable")
 
-    if task.get("buyer_wallet", "").lower() != body.buyer_wallet.lower():
-        raise HTTPException(403, detail="Wallet mismatch")
+    # Vérifier le wallet on-chain — EscrowManager.taskClients est la source de vérité
+    from app.repo.access_repo import verify_access as _verify_access
+    if not _verify_access(task.get("agent_ids", [{}])[0].get("agent_id", ""), body.buyer_wallet):
+        # Fallback : vérifier directement via EscrowManager
+        from app.core.config import get_settings as _gs
+        from web3 import Web3 as _W3
+        _s = _gs()
+        try:
+            _w3 = _W3(_W3.HTTPProvider(_s.rpc_url, request_kwargs={"timeout": 5}))
+            from app.core.abis import ESCROW_MANAGER_ABI as _escrow_abi2
+            _c = _w3.eth.contract(address=_W3.to_checksum_address(_s.escrow_manager_address), abi=_escrow_abi2)
+            onchain_buyer = _c.functions.taskClients(task_id).call()
+            if onchain_buyer.lower() != body.buyer_wallet.lower():
+                raise HTTPException(403, detail="Wallet mismatch")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(403, detail="Wallet mismatch — could not verify on-chain")
 
-    # Verify pipeline payment exists on-chain via The Graph
-    from app.services.graph_client import get_escrow_events_for_task as _graph_escrow
-    onchain = _graph_escrow(task_id)
-    if not any(e.get("eventType") == "PipelinePaymentDeposited" for e in onchain):
-        raise HTTPException(402, detail="Paiement pipeline non trouvé on-chain — attendez la confirmation du bloc")
+    # Vérifier paiement pipeline direct RPC — taskFunds > 0
+    from web3 import Web3 as _W3
+    from app.core.config import get_settings as _gs2
+    _s2 = _gs2()
+    _w3p = _W3(_W3.HTTPProvider(_s2.rpc_url, request_kwargs={"timeout": 5}))
+    from app.core.abis import ESCROW_MANAGER_ABI as _escrow_abi
+    _escrow = _w3p.eth.contract(address=_W3.to_checksum_address(_s2.escrow_manager_address), abi=_escrow_abi)
+    if _escrow.functions.taskFunds(task_id).call() == 0:
+        raise HTTPException(402, detail="Paiement pipeline non trouvé on-chain")
 
     from app.core.config import get_settings
     access_duration = getattr(get_settings(), "pack_access_duration_days", 30)
@@ -714,8 +621,19 @@ async def check_pack_access(task_id: str, buyer_wallet: str) -> JSONResponse:
     if not task:
         return JSONResponse({"has_access": False, "reason": "not_found"})
 
-    if task.get("buyer_wallet", "").lower() != buyer_wallet.lower():
-        return JSONResponse({"has_access": False, "reason": "wallet_mismatch"})
+    # Vérifier wallet on-chain via EscrowManager.taskClients
+    from app.core.config import get_settings as _gs
+    from web3 import Web3 as _W3
+    _s = _gs()
+    try:
+        _w3 = _W3(_W3.HTTPProvider(_s.rpc_url, request_kwargs={"timeout": 5}))
+        from app.core.abis import ESCROW_MANAGER_ABI as _escrow_abi3
+        _c = _w3.eth.contract(address=_W3.to_checksum_address(_s.escrow_manager_address), abi=_escrow_abi3)
+        onchain_buyer = _c.functions.taskClients(task_id).call()
+        if onchain_buyer.lower() != buyer_wallet.lower():
+            return JSONResponse({"has_access": False, "reason": "wallet_mismatch"})
+    except Exception:
+        return JSONResponse({"has_access": False, "reason": "onchain_check_failed"})
 
     expires_str = task.get("access_expires_at")
     if not expires_str:
@@ -771,7 +689,6 @@ async def plan_only(body: PlanOnlyRequest) -> JSONResponse:
         task_id=task_id,
         task_prompt=body.prompt,
         mode=plan.mode,
-        buyer_wallet=body.buyer_wallet,
     )
     update_pipeline_task(
         task_id,
@@ -807,29 +724,14 @@ async def get_alternatives(body: AlternativesRequest) -> JSONResponse:
         from app.services.matching_service import (
             compute_embedding, cosine_similarity, _load_agents_with_embeddings,
         )
-        from app.services.eigentrust_service import compute_eigentrust
-        from app.db.identity_repo import get_all_agent_identities, get_agent_identity
-        from app.services.graph_client import get_solo_scores, get_pipeline_scores
+        from app.repo.identity_repo import get_all_agent_identities, get_agent_identity
+        from app.services.graph_client import get_eigentrust_score
 
         all_ids = get_all_agent_identities()
-        agents  = [
-            {"agent_id": r["agent_id"], "token_id": r["current_token_id"]}
+        trust_scores = {
+            r["agent_id"]: (get_eigentrust_score(r["current_token_id"]) or 0.0)
             for r in all_ids
             if r.get("current_token_id") and r.get("agent_type", 0) != 1
-        ]
-        p_overrides = {}
-        for a in agents:
-            scores = get_solo_scores(a["agent_id"]) or get_pipeline_scores(a["agent_id"])
-            if scores:
-                nonzero = [s for s in scores if s > 0]
-                recent  = nonzero[-5:] if nonzero else []
-                if recent:
-                    p_overrides[a["agent_id"]] = sum(recent) / len(recent)
-
-        et_result    = compute_eigentrust(agents, task_p_overrides=p_overrides or None)
-        trust_scores = {
-            aid: et_result.scores_by_agent[aid]["global_trust"]
-            for aid in et_result.scores_by_agent
         }
 
         st_emb     = compute_embedding(body.subtask_description)
@@ -884,7 +786,7 @@ async def pipeline_purchase_info(body: PurchaseInfoRequest) -> JSONResponse:
     if not selected:
         raise HTTPException(400, detail="Aucun agent sélectionné pour cette tâche")
 
-    from app.db.identity_repo import get_agent_identity
+    from app.repo.identity_repo import get_agent_identity
     from app.core.config import get_settings
 
     enriched = []
@@ -949,7 +851,6 @@ async def execute_task(body: ExecuteRequest, bg: BackgroundTasks) -> JSONRespons
             task_id=body.task_id,
             task_prompt=prompt,
             mode=mode,
-            buyer_wallet=body.buyer_wallet,
         )
         update_pipeline_task(
             body.task_id,
@@ -999,7 +900,6 @@ async def run_task(body: RunTaskRequest, bg: BackgroundTasks) -> RunTaskResponse
         task_id=task_id,
         task_prompt=body.prompt,
         mode=plan.mode,
-        buyer_wallet=body.buyer_wallet,
     )
     update_pipeline_task(
         task_id,
@@ -1048,7 +948,7 @@ async def get_task_status(task_id: str) -> JSONResponse:
 # ── GET /tasks/ ───────────────────────────────────────────────────────────────
 
 @router.get("/")
-async def list_tasks(buyer_wallet: str = "", limit: int = 20) -> JSONResponse:
-    """List recent tasks, optionally filtered by buyer_wallet."""
-    tasks = list_pipeline_tasks(buyer_wallet=buyer_wallet or None, limit=limit)
+async def list_tasks(limit: int = 20) -> JSONResponse:
+    """List recent tasks. buyer_wallet est on-chain — utiliser verify_access() pour filtrer."""
+    tasks = list_pipeline_tasks(limit=limit)
     return JSONResponse({"tasks": tasks, "count": len(tasks)})

@@ -1,54 +1,26 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.25;
 
-// ════════════════════════════════════════════════════════════════════════════
-//  ReputationRegistry  —  AgentMarket · ERC-8004 Reputation Registry
-// ════════════════════════════════════════════════════════════════════════════
-//
-//  Alignement ERC-8004 §Reputation Registry
-//  ─────────────────────────────────────────────────────────────────────────
-//  Interface publique conforme au spec :
-//    giveFeedback(agentId, value, valueDecimals, tag1, tag2, endpoint, feedbackURI, feedbackHash)
-//    revokeFeedback(agentId, feedbackIndex)
-//    appendResponse(agentId, clientAddress, feedbackIndex, responseURI, responseHash)
-//    getSummary(agentId, clientAddresses[], tag1, tag2) → (count, summaryValue, summaryValueDecimals)
-//    readFeedback(agentId, clientAddress, feedbackIndex) → (value, valueDecimals, tag1, tag2, isRevoked)
-//    readAllFeedback(agentId, clientAddresses[], tag1, tag2, includeRevoked)
-//    getClients(agentId) → address[]
-//    getLastIndex(agentId, clientAddress) → uint64
-//    initialize(identityRegistry_)
-//    getIdentityRegistry() → address
-//
-//  Adapter interne (compatibilité ValidationRegistry) :
-//    recordReputation(agentId string, delta, isIncrease, reason)
-//      → mappe vers giveFeedback() avec tag1="successRate", tag2=reason
-//      → seuls les callers autorisés peuvent appeler (setAuthorizedCaller)
-//
-//  agentId ERC-8004 = tokenId uint256 de l'IdentityRegistry (ERC-721)
-//  String agentId → tokenId via IIdentityRegistry.getCurrentTokenId()
-//
-//  Tags utilisés dans notre marketplace :
-//  ┌─────────────────┬──────────────────────────────────────────────────────┐
-//  │ tag1            │ Source / Sens                                        │
-//  ├─────────────────┼──────────────────────────────────────────────────────┤
-//  │ successRate     │ ValidationRegistry → provider/judge (score 0-100)   │
-//  │ starred         │ User → agent (note 1-5, converti en 20-100)         │
-//  │ reachable       │ Platform monitor → endpoint health (0 ou 1)         │
-//  │ uptime          │ Platform monitor → uptime % (valueDecimals=2)       │
-//  │ eigenTrust      │ Platform → score EigenTrust calculé off-chain       │
-//  └─────────────────┴──────────────────────────────────────────────────────┘
-//
-//  Contrats siblings :
-//  ┌──────────────────────────────────────────────────────────────────────┐
-//  │ IdentityRegistry   → isActive · agentIdExists · getCurrentTokenId   │
-//  │                      getAgentWallet · ownerOf (ERC-721)             │
-//  ├──────────────────────────────────────────────────────────────────────┤
-//  │ ValidationRegistry → appelle recordReputation() après finalisation  │
-//  └──────────────────────────────────────────────────────────────────────┘
-
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-// ── Interfaces ────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  ReputationRegistry — AgentMarket · ERC-8004 Reputation Registry
+//
+//  Tags utilisés :
+//    successRate  ← ValidationRegistry.recordFromValidation() (score 0-100, audit trail)
+//    starred      ← user via giveFeedback() (note 1-5 → 20-100)
+//
+//  Scores calculés (state variables directes) :
+//    eigenTrustScore[tokenId]  ← platform via setEigenTrustScore() (résultat off-chain)
+//
+//  Lecture :
+//    getClients(tokenId)                           → liste des wallets ayant donné feedback
+//    getLastIndex(tokenId, clientAddress)           → dernier index de feedback
+//    readFeedback(tokenId, clientAddress, index)    → détail d'un feedback
+//    getSummary(tokenId, clientAddresses[], tag1, tag2) → moyenne agrégée
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Interface ────────────────────────────────────────────────────────────────
 
 interface IIdentityRegistry {
     function agentIdExists(string calldata agentId_) external view returns (bool);
@@ -56,16 +28,11 @@ interface IIdentityRegistry {
     function ownerOf(uint256 tokenId) external view returns (address);
 }
 
-// ── Contract ──────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
 
 contract ReputationRegistry is Ownable {
 
-    // ── State ─────────────────────────────────────────────────────────────────
-
-    IIdentityRegistry public identityRegistry;
-
-    // Callers autorisés à appeler recordReputation() (ex: ValidationRegistry)
-    mapping(address => bool) public authorizedCallers;
+    // ── Type Declarations ─────────────────────────────────────────────────────
 
     struct FeedbackData {
         int128 value;
@@ -75,17 +42,26 @@ contract ReputationRegistry is Ownable {
         bool   isRevoked;
     }
 
-    // agentId (tokenId) → clientAddress → feedbackIndex (1-based) → data
+    // ── State Variables ───────────────────────────────────────────────────────
+
+    IIdentityRegistry public identityRegistry;
+
+    // Callers autorisés à écrire via setEigenTrustScore()
+    mapping(address => bool) public authorizedCallers;
+
+    // tokenId → clientAddress → feedbackIndex (1-based) → données
     mapping(uint256 => mapping(address => mapping(uint64 => FeedbackData))) private _feedback;
-
-    // agentId → clientAddress → dernier index (= nombre total de feedbacks donnés)
+    // tokenId → clientAddress → dernier index écrit
     mapping(uint256 => mapping(address => uint64)) private _lastIndex;
-
-    // agentId → liste des clientAddresses uniques
-    mapping(uint256 => address[])          private _clients;
+    // tokenId → liste des clientAddresses ayant donné un feedback
+    mapping(uint256 => address[]) private _clients;
+    // tokenId → clientAddress → a déjà donné un feedback (évite les doublons dans _clients)
     mapping(uint256 => mapping(address => bool)) private _isClient;
 
-    // ── Events ERC-8004 ───────────────────────────────────────────────────────
+    // EigenTrust score courant par agent — écrit par la plateforme après calcul off-chain
+    mapping(uint256 => uint256) public eigenTrustScore;
+
+    // ── Events ────────────────────────────────────────────────────────────────
 
     event NewFeedback(
         uint256 indexed agentId,
@@ -130,29 +106,27 @@ contract ReputationRegistry is Ownable {
 
     constructor() Ownable(msg.sender) {}
 
-    // ── Initialization ────────────────────────────────────────────────────────
+    // ── Admin ─────────────────────────────────────────────────────────────────
 
-    /// @notice Appelé par setup_complete.js après déploiement.
     function initialize(address identityRegistry_) external onlyOwner {
         identityRegistry = IIdentityRegistry(identityRegistry_);
     }
 
-    /// @notice ERC-8004: retourne l'adresse de l'IdentityRegistry lié.
-    function getIdentityRegistry() external view returns (address) {
-        return address(identityRegistry);
-    }
-
-    // ── Gestion des callers autorisés ─────────────────────────────────────────
-
-    /// @notice Autorise ou révoque un contrat à appeler recordReputation().
     function setAuthorizedCaller(address caller, bool authorized) external onlyOwner {
         authorizedCallers[caller] = authorized;
     }
 
-    // ── ERC-8004: giveFeedback ────────────────────────────────────────────────
+    function setEigenTrustScore(uint256 tokenId, uint256 score) external {
+        if (!authorizedCallers[msg.sender] && msg.sender != owner()) revert UnauthorizedCaller(msg.sender);
+        eigenTrustScore[tokenId] = score;
+    }
 
-    /// @notice Donne un feedback public sur un agent.
-    /// @dev Le propriétaire du token NE PEUT PAS noter son propre agent (spec ERC-8004).
+    // ── External — ERC-8004 Write ─────────────────────────────────────────────
+
+    /**
+     * @notice Feedback public d'un utilisateur sur un agent.
+     * @dev Le propriétaire du token ne peut pas noter son propre agent (ERC-8004).
+     */
     function giveFeedback(
         uint256         agentId,
         int128          value,
@@ -166,7 +140,6 @@ contract ReputationRegistry is Ownable {
         _requireRegistry();
         if (valueDecimals > 18) revert InvalidValueDecimals(valueDecimals);
 
-        // Vérifie que le token existe et que le caller n'est pas le owner
         try identityRegistry.ownerOf(agentId) returns (address tokenOwner) {
             if (tokenOwner == msg.sender) revert AgentOwnerCannotRate(agentId);
         } catch {
@@ -176,32 +149,6 @@ contract ReputationRegistry is Ownable {
         _store(agentId, msg.sender, value, valueDecimals, tag1, tag2, endpoint, feedbackURI, feedbackHash);
     }
 
-    // ── Adapter interne: appelé par ValidationRegistry ────────────────────────
-
-    /// @notice Adapter pour ValidationRegistry.
-    ///         Mappe (agentId string, delta, isIncrease, reason) → giveFeedback interne.
-    ///         tag1 = "successRate", tag2 = reason ("VALID","INVALID","CONSENSUS","DEVIATED","ABSENT")
-    ///         clientAddress = msg.sender (= adresse de ValidationRegistry)
-    function recordReputation(
-        string calldata agentId,
-        uint256         delta,
-        bool            isIncrease,
-        string calldata reason
-    ) external {
-        if (!authorizedCallers[msg.sender]) revert UnauthorizedCaller(msg.sender);
-        _requireRegistry();
-        if (!identityRegistry.agentIdExists(agentId)) revert AgentIdNotFound(agentId);
-
-        uint256 tokenId = identityRegistry.getCurrentTokenId(agentId);
-        int128  value   = isIncrease
-            ? int128(int256(delta))
-            : -int128(int256(delta));
-
-        _store(tokenId, msg.sender, value, 0, "successRate", reason, "", "", bytes32(0));
-    }
-
-    // ── ERC-8004: revokeFeedback ──────────────────────────────────────────────
-
     function revokeFeedback(uint256 agentId, uint64 feedbackIndex) external {
         uint64 last = _lastIndex[agentId][msg.sender];
         if (feedbackIndex == 0 || feedbackIndex > last)
@@ -210,8 +157,6 @@ contract ReputationRegistry is Ownable {
         _feedback[agentId][msg.sender][feedbackIndex].isRevoked = true;
         emit FeedbackRevoked(agentId, msg.sender, feedbackIndex);
     }
-
-    // ── ERC-8004: appendResponse ──────────────────────────────────────────────
 
     function appendResponse(
         uint256         agentId,
@@ -226,10 +171,15 @@ contract ReputationRegistry is Ownable {
         emit ResponseAppended(agentId, clientAddress, feedbackIndex, msg.sender, responseURI, responseHash);
     }
 
-    // ── ERC-8004: getSummary ──────────────────────────────────────────────────
+    // ── Views — ERC-8004 Read ─────────────────────────────────────────────────
 
-    /// @notice Retourne la moyenne des feedbacks non révoqués filtrés par tag.
-    /// @dev clientAddresses DOIT être non vide (spec ERC-8004 — anti-Sybil).
+    function getIdentityRegistry() external view returns (address) {
+        return address(identityRegistry);
+    }
+
+    /**
+     * @notice Retourne la moyenne des feedbacks non révoqués filtrés par tag.
+     */
     function getSummary(
         uint256           agentId,
         address[] calldata clientAddresses,
@@ -238,11 +188,10 @@ contract ReputationRegistry is Ownable {
     ) external view returns (uint64 count, int128 summaryValue, uint8 summaryValueDecimals) {
         require(clientAddresses.length > 0, "clientAddresses required");
 
-        bool filterTag1 = bytes(tag1Filter).length > 0;
-        bool filterTag2 = bytes(tag2Filter).length > 0;
-
-        int256 total = 0;
-        uint64 cnt   = 0;
+        bool   filterTag1 = bytes(tag1Filter).length > 0;
+        bool   filterTag2 = bytes(tag2Filter).length > 0;
+        int256 total      = 0;
+        uint64 cnt        = 0;
 
         for (uint256 i = 0; i < clientAddresses.length; i++) {
             address client = clientAddresses[i];
@@ -262,8 +211,6 @@ contract ReputationRegistry is Ownable {
         summaryValueDecimals = 0;
     }
 
-    // ── ERC-8004: readFeedback ────────────────────────────────────────────────
-
     function readFeedback(
         uint256 agentId,
         address clientAddress,
@@ -278,8 +225,6 @@ contract ReputationRegistry is Ownable {
         FeedbackData storage fb = _feedback[agentId][clientAddress][feedbackIndex];
         return (fb.value, fb.valueDecimals, fb.tag1, fb.tag2, fb.isRevoked);
     }
-
-    // ── ERC-8004: readAllFeedback ─────────────────────────────────────────────
 
     function readAllFeedback(
         uint256           agentId,
@@ -296,26 +241,21 @@ contract ReputationRegistry is Ownable {
         string[]  memory tag2s,
         bool[]    memory revokedStatuses
     ) {
-        // Solidity ne permet pas de mélanger calldata et storage dans un ternaire.
-        // On copie _clients[agentId] en mémoire si aucun filtre de clients fourni.
         address[] memory searchClients;
         if (clientAddresses.length > 0) {
             searchClients = new address[](clientAddresses.length);
-            for (uint256 k = 0; k < clientAddresses.length; k++) {
+            for (uint256 k = 0; k < clientAddresses.length; k++)
                 searchClients[k] = clientAddresses[k];
-            }
         } else {
             address[] storage stored = _clients[agentId];
             searchClients = new address[](stored.length);
-            for (uint256 k = 0; k < stored.length; k++) {
+            for (uint256 k = 0; k < stored.length; k++)
                 searchClients[k] = stored[k];
-            }
         }
 
         bool filterTag1 = bytes(tag1Filter).length > 0;
         bool filterTag2 = bytes(tag2Filter).length > 0;
 
-        // Premier passage : compter
         uint256 total = 0;
         for (uint256 i = 0; i < searchClients.length; i++) {
             address client = searchClients[i];
@@ -329,7 +269,6 @@ contract ReputationRegistry is Ownable {
             }
         }
 
-        // Allouer
         clients           = new address[](total);
         feedbackIndexes   = new uint64[](total);
         values            = new int128[](total);
@@ -338,7 +277,6 @@ contract ReputationRegistry is Ownable {
         tag2s             = new string[](total);
         revokedStatuses   = new bool[](total);
 
-        // Deuxième passage : remplir
         uint256 pos = 0;
         for (uint256 i = 0; i < searchClients.length; i++) {
             address client = searchClients[i];
@@ -360,13 +298,9 @@ contract ReputationRegistry is Ownable {
         }
     }
 
-    // ── ERC-8004: getClients ──────────────────────────────────────────────────
-
     function getClients(uint256 agentId) external view returns (address[] memory) {
         return _clients[agentId];
     }
-
-    // ── ERC-8004: getLastIndex ────────────────────────────────────────────────
 
     function getLastIndex(uint256 agentId, address clientAddress) external view returns (uint64) {
         return _lastIndex[agentId][clientAddress];
@@ -406,17 +340,10 @@ contract ReputationRegistry is Ownable {
         }
 
         emit NewFeedback(
-            agentId,
-            clientAddress,
-            newIndex,
-            value,
-            valueDecimals,
-            tag1,       // indexed
-            tag1,
-            tag2,
-            endpoint,
-            feedbackURI,
-            feedbackHash
+            agentId, clientAddress, newIndex,
+            value, valueDecimals,
+            tag1, tag1, tag2,
+            endpoint, feedbackURI, feedbackHash
         );
     }
 }

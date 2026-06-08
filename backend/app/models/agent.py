@@ -15,11 +15,13 @@ class AgentType(str, Enum):
 
 
 class AgentStatus(str, Enum):
-    ACTIVE            = "active"
-    SUSPENDED         = "suspended"
-    REVOKED           = "revoked"
-    PENDING_SIGNATURE = "pending_signature"
-    PENDING_INDEX     = "pending_index"
+    ACTIVE              = "active"
+    SUSPENDED           = "suspended"
+    REVOKED             = "revoked"
+    PENDING_SIGNATURE   = "pending_signature"
+    PENDING_INDEX       = "pending_index"
+    PENDING_VALIDATION  = "pending_validation"   # juge indexé, test technique en cours
+    VALIDATION_FAILED   = "validation_failed"    # test technique échoué — nouvelle version requise
 
 
 class ServiceEndpoint(BaseModel):

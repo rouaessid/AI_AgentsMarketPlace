@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import logging
 import uuid
 
@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from web3 import Web3
 
 from app.core.config import get_settings
+from app.repo import access_repo
 from app.models.agent import (
     AgentEditRequest, AgentNewVersionRequest, AgentNewVersionResponse,
     AgentOnChainConfirm, AgentRecord,
@@ -15,12 +16,11 @@ from app.models.agent import (
 )
 from app.models.purchase import (
     PurchaseInfoResponse, PurchaseRequest, PurchaseResponse,
-    AccessStatus, ValidationStatusResponse, JudgeVerdictOut,
+    AccessStatus, ValidationStatusResponse,
 )
 from app.services.agent_service   import AgentService
 from app.services.sandbox_service import SandboxInput, SandboxService
 from app.services.ngrok_service   import get_agent_endpoint, get_ngrok_url
-from app.db import access_repo
 
 logger      = logging.getLogger(__name__)
 router      = APIRouter(prefix="/agents", tags=["agents"])
@@ -29,71 +29,12 @@ sandbox_svc = SandboxService()
 _manifests: dict[str, dict] = {}
 _settings   = get_settings()
 
-# ── Minimal EscrowManager ABI for depositPayment ─────────────────────────────
-_ESCROW_DEPOSIT_ABI = [{
-    "inputs": [
-        {"internalType": "string", "name": "taskId_",  "type": "string"},
-        {"internalType": "string", "name": "agentId_", "type": "string"},
-    ],
-    "name": "depositPayment",
-    "outputs": [],
-    "stateMutability": "payable",
-    "type": "function",
-}]
-
-# ── Minimal IdentityRegistry ABI for on-chain price/status checks ─────────────
-_IDENTITY_REGISTRY_ABI = [
-    {
-        "inputs": [{"internalType": "string", "name": "agentId_", "type": "string"}],
-        "name": "isActive",
-        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-    {
-        "inputs": [{"internalType": "string", "name": "agentId_", "type": "string"}],
-        "name": "getPricePerTask",
-        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-]
-
-# ── Minimal IdentityRegistry ABI — price + status ────────────────────────────
-_IDENTITY_REGISTRY_ABI = [
-    {
-        "inputs": [{"internalType": "string", "name": "agentId_", "type": "string"}],
-        "name": "getPricePerTask",
-        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-    {
-        "inputs": [{"internalType": "string", "name": "agentId_", "type": "string"}],
-        "name": "isActive",
-        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-]
-
-# ── Minimal ReputationRegistry ABI for giveFeedback ──────────────────────────
-_REPUTATION_GIVE_FEEDBACK_ABI = [{
-    "inputs": [
-        {"internalType": "uint256", "name": "agentId",       "type": "uint256"},
-        {"internalType": "int128",  "name": "value",         "type": "int128"},
-        {"internalType": "uint8",   "name": "valueDecimals", "type": "uint8"},
-        {"internalType": "string",  "name": "tag1",          "type": "string"},
-        {"internalType": "string",  "name": "tag2",          "type": "string"},
-        {"internalType": "string",  "name": "endpoint",      "type": "string"},
-        {"internalType": "string",  "name": "feedbackURI",   "type": "string"},
-        {"internalType": "bytes32", "name": "feedbackHash",  "type": "bytes32"},
-    ],
-    "name": "giveFeedback",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function",
-}]
+from app.core.abis import (
+    ESCROW_MANAGER_ABI       as _ESCROW_DEPOSIT_ABI,
+    IDENTITY_REGISTRY_ABI    as _IDENTITY_REGISTRY_ABI,
+    STAKING_CONTRACT_ABI     as _STAKING_ABI,
+    REPUTATION_REGISTRY_ABI  as _REPUTATION_GIVE_FEEDBACK_ABI,
+)
 
 
 
@@ -150,7 +91,27 @@ async def retry_register(agent_id: str) -> JSONResponse:
 @router.post("/confirm", response_model=AgentRecord)
 async def confirm_onchain(body: AgentOnChainConfirm) -> AgentRecord:
     try:
-        return await agent_svc.confirm(body)
+        record = await agent_svc.confirm(body)
+
+        from app.models.agent import AgentType
+        import asyncio as _asyncio
+
+        if record.agent_type == AgentType.JUDGE:
+            # Honeypot — asynchrone, non bloquant (~25s)
+            from app.services.honeypot_service import run_onboarding
+            _asyncio.create_task(run_onboarding(record.agent_id))
+        else:
+            # PROVIDER actif directement — calculer embedding en fond
+            if record.registration_file:
+                from app.services.matching_service import embed_agent_capabilities
+                meta = record.registration_file.model_dump()
+                _asyncio.get_event_loop().run_in_executor(
+                    None, lambda: embed_agent_capabilities(record.agent_id, meta)
+                )
+
+        return record
+    except HTTPException:
+        raise
     except Exception as e:
         raise _http(e)
 
@@ -175,7 +136,7 @@ async def registration_status(agent_id: str) -> JSONResponse:
       - "active"           : indexer confirmed AgentCreated — agent is live
       - "suspended" / "revoked" : changed by governance
     """
-    from app.db.identity_repo import get_agent_identity, upsert_agent_identity
+    from app.repo.identity_repo import get_agent_identity, upsert_agent_identity
     from app.services.graph_client import get_agent as _get_graph_agent
 
     row = get_agent_identity(agent_id)
@@ -187,29 +148,40 @@ async def registration_status(agent_id: str) -> JSONResponse:
         graph_agent = _get_graph_agent(agent_id)
         if graph_agent:
             token_id = int(graph_agent["tokenId"])
-            upsert_agent_identity(agent_id=agent_id, status="active")
-            row["status"]           = "active"
-            row["current_token_id"] = token_id
             from app.services.agent_service import _records, _agent_index as _aidx
-            from app.models.agent import AgentStatus as _AS
-            rid = _aidx.get(agent_id)
+            from app.models.agent import AgentStatus as _AS, AgentType as _AT
+            from app.services.honeypot_service import is_judge_authorized
+
+            rid    = _aidx.get(agent_id)
+            record = _records.get(rid) if rid else None
+
+            # Juges → pending_validation jusqu'au honeypot ; providers → active directement
+            if record and record.agent_type == _AT.JUDGE:
+                new_status = _AS.ACTIVE if is_judge_authorized(agent_id) else _AS.PENDING_VALIDATION
+            else:
+                new_status = _AS.ACTIVE
+
+            upsert_agent_identity(agent_id=agent_id, registration_status=new_status.value)
+            row["status"]           = new_status.value
+            row["current_token_id"] = token_id
+
             if rid and rid in _records:
                 _records[rid] = _records[rid].model_copy(update={
-                    "status": _AS.ACTIVE,
+                    "status": new_status,
                     "current_token_id": token_id,
                 })
-                # Calcul embedding maintenant que The Graph a confirmé ACTIVE
-                try:
-                    rec = _records[rid]
-                    if rec.registration_file:
-                        import asyncio as _aio
-                        from app.services.matching_service import embed_agent_capabilities
-                        meta = rec.registration_file.model_dump()
-                        _aio.get_event_loop().run_in_executor(
-                            None, lambda: embed_agent_capabilities(agent_id, meta)
-                        )
-                except Exception as _e:
-                    logger.warning("Embedding non calculé pour %s: %s", agent_id, _e)
+                if new_status == _AS.ACTIVE:
+                    try:
+                        rec = _records[rid]
+                        if rec.registration_file:
+                            import asyncio as _aio
+                            from app.services.matching_service import embed_agent_capabilities
+                            meta = rec.registration_file.model_dump()
+                            _aio.get_event_loop().run_in_executor(
+                                None, lambda: embed_agent_capabilities(agent_id, meta)
+                            )
+                    except Exception as _e:
+                        logger.warning("Embedding non calculé pour %s: %s", agent_id, _e)
 
     return JSONResponse({
         "agent_id":     agent_id,
@@ -226,7 +198,20 @@ async def new_version(agent_id: str, body: AgentNewVersionRequest) -> AgentNewVe
     if body.agent_id != agent_id:
         raise HTTPException(400, detail="agent_id mismatch")
     try:
-        return await agent_svc.new_version(body)
+        result = await agent_svc.new_version(body)
+        # Pour les juges : nouvelle version = nouveau test technique
+        from app.models.agent import AgentType as _AT, AgentStatus as _AS
+        from app.repo.identity_repo import upsert_agent_identity
+        import asyncio as _aio
+        try:
+            record = await agent_svc.get_by_agent_id(agent_id)
+            if record.agent_type == _AT.JUDGE:
+                upsert_agent_identity(agent_id=agent_id, registration_status=_AS.PENDING_VALIDATION.value)
+                from app.services.honeypot_service import run_onboarding
+                _aio.create_task(run_onboarding(agent_id))
+        except Exception:
+            pass
+        return result
     except Exception as e:
         raise _http(e)
 
@@ -238,19 +223,28 @@ async def list_by_owner(owner_address: str) -> JSONResponse:
     records = await agent_svc.list_by_owner(owner_address)
 
     from app.models.agent import AgentType as _AgentType
-    from app.services.graph_client import get_judge_reputation
+    from app.services.graph_client import get_judge_agreement_rate
+    from app.services.honeypot_service import is_judge_authorized
     import asyncio as _aio
 
-    # Fetch judge reputations in parallel (pass wallet address, not agent_id)
     judge_records = [r for r in records if r.agent_type == _AgentType.JUDGE and r.owner_address]
     loop = _aio.get_event_loop()
     rep_results = await _aio.gather(*[
-        loop.run_in_executor(None, get_judge_reputation, r.owner_address)
+        loop.run_in_executor(None, get_judge_agreement_rate, r.owner_address)
         for r in judge_records
     ], return_exceptions=True)
     rep_by_agent = {
         r.agent_id: res
         for r, res in zip(judge_records, rep_results)
+        if not isinstance(res, Exception)
+    }
+    auth_results = await _aio.gather(*[
+        loop.run_in_executor(None, is_judge_authorized, r.agent_id)
+        for r in judge_records
+    ], return_exceptions=True)
+    auth_by_agent = {
+        r.agent_id: res
+        for r, res in zip(judge_records, auth_results)
         if not isinstance(res, Exception)
     }
 
@@ -259,15 +253,17 @@ async def list_by_owner(owner_address: str) -> JSONResponse:
         data = r.model_dump(mode="json")
         data["earnings_eth"] = 0.0
 
-        if r.agent_type == _AgentType.JUDGE and r.agent_id in rep_by_agent:
-            rep  = rep_by_agent[r.agent_id]
-            reg  = data.get("registration_file") or {}
-            caps = dict(reg.get("capabilities") or {})
-            caps["tasks_performed"]  = rep["total_validations"]
-            caps["reputation_score"] = round(rep["agreement_rate"] * 100, 1)
-            caps["success_rate"]     = round(rep["agreement_rate"] * 100, 1)
-            if data.get("registration_file") is not None:
-                data["registration_file"]["capabilities"] = caps
+        if r.agent_type == _AgentType.JUDGE:
+            data["judge_authorized"] = auth_by_agent.get(r.agent_id)
+            if r.agent_id in rep_by_agent:
+                rep  = rep_by_agent[r.agent_id]
+                reg  = data.get("registration_file") or {}
+                caps = dict(reg.get("capabilities") or {})
+                caps["tasks_performed"]  = rep["total_validations"]
+                caps["reputation_score"] = round(rep["agreement_rate"] * 100, 1)
+                caps["success_rate"]     = round(rep["agreement_rate"] * 100, 1)
+                if data.get("registration_file") is not None:
+                    data["registration_file"]["capabilities"] = caps
 
         result.append(data)
 
@@ -391,6 +387,27 @@ async def run_agent_public(
     if record.status.value != "active":
         raise HTTPException(403, detail=f"Agent '{agent_id}' non actif")
 
+    # ── Vérification accès buyer (expiry à la volée — zéro colonne DB) ───────
+    if body.buyer_wallet:
+        grant = access_repo.get_access_grant(agent_id, body.buyer_wallet)
+        if grant:
+            from datetime import datetime, timedelta, timezone
+            from app.services.graph_client import get_escrow_events_for_task
+            try:
+                events   = get_escrow_events_for_task(grant["task_id"])
+                paid_at  = next((e for e in events if e.get("eventType") in
+                                 ("PaymentDeposited", "PipelinePaymentDeposited")), None)
+                if paid_at:
+                    granted_ts = int(paid_at["blockTimestamp"])
+                    duration   = getattr(record, "access_duration_days", 30)
+                    expires    = datetime.fromtimestamp(granted_ts, tz=timezone.utc) + timedelta(days=duration)
+                    if datetime.now(timezone.utc) > expires:
+                        raise HTTPException(403, detail="Accès expiré — renouvelez votre accès")
+            except HTTPException:
+                raise
+            except Exception:
+                pass  # si The Graph injoignable, on laisse passer
+
     rf            = record.registration_file
     _SENSITIVE    = ("PRIVATE_KEY", "SECRET_KEY", "WALLET_KEY", "MNEMONIC", "SEED_PHRASE")
     all_keys      = rf.sandbox_config.get("env_var_keys", []) if rf else []
@@ -411,7 +428,7 @@ async def run_agent_public(
             if "@sha256:" in fresh and fresh != docker_image:
                 logger.warning("Digest obsolète %s → mise à jour automatique", agent_id)
                 from app.services.agent_service import _records, _agent_index
-                from app.db.identity_repo import upsert_agent_identity
+                from app.repo.identity_repo import upsert_agent_identity
                 rid = _agent_index.get(agent_id)
                 if rid and rid in _records:
                     _records[rid] = _records[rid].model_copy(
@@ -459,16 +476,18 @@ async def run_agent_public(
     if manifest.status not in ("error", "failed") and manifest.proxy_cid and body.buyer_wallet:
         grant = access_repo.get_access_grant(agent_id, body.buyer_wallet)
         if grant:
-            val_task_id = f"val-{manifest.run_id[:16]}"
-            access_repo.upsert_validation_session(
-                agent_id, val_task_id=val_task_id, status="pending"
-            )
+            session = access_repo.get_validation_session(agent_id)
+            if not session or not session.get("val_task_id"):
+                val_task_id = grant["task_id"]          # 1er run — lié au paiement
+            else:
+                val_task_id = f"val-{manifest.run_id[:16]}"  # runs suivants
+            access_repo.upsert_validation_session(agent_id, val_task_id=val_task_id)
             from app.services.judge_service import run_validation
             bg.add_task(
                 run_validation, agent_id, val_task_id, manifest.proxy_cid,
                 0, body.prompt,
             )
-            logger.info("Validation triggered for agent=%s cid=%s", agent_id, manifest.proxy_cid)
+            logger.info("Validation triggered for agent=%s val_task_id=%s", agent_id, val_task_id)
 
     return JSONResponse({
         "run_id":            manifest.run_id,
@@ -575,34 +594,51 @@ async def grant_access(
             access_id=existing["id"],
             agent_id=agent_id,
             task_id=existing["task_id"],
-            tx_hash=existing["tx_hash"] or body.tx_hash,
             status="granted",
             validation_status=_get_val_status(agent_id),
         )
 
-    # Verify payment exists on-chain via The Graph
-    from app.services.graph_client import payment_deposited_for_task
-    if not payment_deposited_for_task(body.task_id):
-        raise HTTPException(402, detail="Paiement non trouvé on-chain — attendez la confirmation du bloc")
+    s = _settings
+    w3 = Web3(Web3.HTTPProvider(s.rpc_url, request_kwargs={"timeout": 5}))
+
+    # Vérifier paiement direct RPC — taskFunds > 0
+    escrow = w3.eth.contract(
+        address=Web3.to_checksum_address(s.escrow_manager_address),
+        abi=_ESCROW_DEPOSIT_ABI,
+    )
+    if escrow.functions.taskFunds(body.task_id).call() == 0:
+        raise HTTPException(402, detail="Paiement non trouvé on-chain")
+
+    # Vérifier stake du vendeur direct RPC
+    if s.staking_contract_address:
+        try:
+            agent_record = await agent_svc.get_by_agent_id(agent_id)
+            owner_wallet = agent_record.owner_address
+            if owner_wallet:
+                staking = w3.eth.contract(
+                    address=Web3.to_checksum_address(s.staking_contract_address),
+                    abi=_STAKING_ABI,
+                )
+                stake_info = staking.functions.stakes(Web3.to_checksum_address(owner_wallet)).call()
+                if stake_info[0] == 0:
+                    raise HTTPException(403, detail="Agent vendeur n'a pas staké")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
     access_id = access_repo.create_access_grant(
         agent_id=agent_id,
-        buyer_wallet=body.buyer_wallet,
         task_id=body.task_id,
-        tx_hash=body.tx_hash,
     )
 
-    # Validation is NOT triggered here — it fires after the first Run
-    # so judges have a real proxy trace (proxy_cid) to evaluate.
-    access_repo.upsert_validation_session(
-        agent_id, val_task_id=None, status="awaiting_run"
-    )
+    # Validation fires after first Run — judges need a real proxy trace.
+    access_repo.upsert_validation_session(agent_id, val_task_id=None)
 
     return PurchaseResponse(
         access_id=access_id,
         agent_id=agent_id,
         task_id=body.task_id,
-        tx_hash=body.tx_hash,
         status="granted",
         validation_status="awaiting_run",
     )
@@ -623,42 +659,66 @@ async def check_access(
         ).model_dump())
 
     val_status = _get_val_status(agent_id)
-    return JSONResponse(AccessStatus(
-        agent_id=agent_id,
-        buyer_wallet=buyer_wallet,
-        has_access=True,
-        task_id=grant["task_id"],
-        tx_hash=grant["tx_hash"],
-        validation_status=val_status,
-    ).model_dump())
+
+    # Calcul des jours restants à la volée (The Graph + IPFS)
+    days_remaining = None
+    expires_at     = None
+    try:
+        from datetime import datetime, timedelta, timezone
+        from app.services.graph_client import get_escrow_events_for_task
+        from app.services.agent_service import _records, _agent_index
+        events  = get_escrow_events_for_task(grant["task_id"])
+        paid_at = next((e for e in events if e.get("eventType") in
+                        ("PaymentDeposited", "PipelinePaymentDeposited")), None)
+        if paid_at:
+            rid      = _agent_index.get(agent_id)
+            record   = _records.get(rid) if rid else None
+            duration = getattr(record, "access_duration_days", 30) if record else 30
+            granted  = datetime.fromtimestamp(int(paid_at["blockTimestamp"]), tz=timezone.utc)
+            expiry   = granted + timedelta(days=duration)
+            now      = datetime.now(timezone.utc)
+            days_remaining = max(0, (expiry - now).days)
+            expires_at     = expiry.isoformat()
+    except Exception:
+        pass
+
+    return JSONResponse({
+        **AccessStatus(
+            agent_id=agent_id,
+            buyer_wallet=buyer_wallet,
+            has_access=True,
+            task_id=grant["task_id"],
+            validation_status=val_status,
+        ).model_dump(),
+        "days_remaining": days_remaining,
+        "expires_at":     expires_at,
+    })
 
 
 @router.get("/{agent_id}/validation")
 async def get_validation(agent_id: str) -> ValidationStatusResponse:
-    """Return the validation status and judge verdicts for an agent."""
-    session  = access_repo.get_validation_session(agent_id)
-    verdicts = access_repo.get_judge_verdicts(agent_id)
+    """Return the validation status for an agent. Verdict and score are on-chain."""
+    session = access_repo.get_validation_session(agent_id)
 
     if not session:
         return ValidationStatusResponse(agent_id=agent_id, status="not_started")
 
+    val_task_id = session.get("val_task_id")
+    from app.services.judge_service import _read_onchain_verdict
+    from app.services.graph_client import get_agent_score, get_validation_response
+    onchain_verdict = _read_onchain_verdict(val_task_id) if val_task_id else None
+    agent_score     = get_agent_score(agent_id)
+    response_uri    = get_validation_response(val_task_id) if val_task_id else None
+
     return ValidationStatusResponse(
         agent_id=agent_id,
-        status=session["status"],
-        consensus_verdict=session["consensus_verdict"],
-        aggregated_score=session["aggregated_score"],
-        started_at=session["started_at"],
-        finished_at=session["finished_at"],
-        judges=[
-            JudgeVerdictOut(
-                judge_id=v["judge_id"],
-                judge_name=v["judge_name"],
-                score=v["score"],
-                justification=v["justification"],
-                verdict=v["verdict"],
-            )
-            for v in verdicts
-        ],
+        val_task_id=val_task_id,
+        status="finalised" if onchain_verdict else "in_progress",
+        consensus_verdict=onchain_verdict,
+        aggregated_score=agent_score.get("averageScore") if agent_score else None,
+        justification_uri=response_uri,
+        started_at=session.get("started_at"),
+        judges=[],
     )
 
 
@@ -671,7 +731,7 @@ async def trigger_validation(agent_id: str, bg: BackgroundTasks) -> JSONResponse
         raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
 
     val_task_id = f"val-dev-{uuid.uuid4().hex[:12]}"
-    access_repo.upsert_validation_session(agent_id, val_task_id=val_task_id, status="pending")
+    access_repo.upsert_validation_session(agent_id, val_task_id=val_task_id)
 
     # Use a placeholder CID for dev trigger — judges will get minimal trace data
     dev_proxy_cid = f"QmDEV{uuid.uuid4().hex[:40]}"
@@ -735,7 +795,7 @@ async def get_feedback_info(
     graph_agent = _get_graph_agent(agent_id)
     if not graph_agent:
         # Fallback: try local DB
-        from app.db.identity_repo import get_agent_identity
+        from app.repo.identity_repo import get_agent_identity
         identity = get_agent_identity(agent_id)
         if not identity:
             raise HTTPException(404, detail=f"Agent {agent_id!r} introuvable")
@@ -788,11 +848,16 @@ async def get_feedback_info(
 @router.get("/{agent_id}/judge-stats")
 async def get_judge_stats(agent_id: str):
     """Aggregated statistics for a judge agent (for the 'My Agents > View' panel)."""
-    from app.services.graph_client import get_judge_reputation
-    from app.db.access_repo import get_verdicts_by_judge
+    from app.services.graph_client import get_judge_agreement_rate
+    from app.repo.access_repo import get_verdicts_by_judge
+    from app.services.agent_service import get_agent_from_cache
     from datetime import datetime, timezone, timedelta
 
-    rep      = get_judge_reputation(agent_id)
+    identity = get_agent_from_cache(agent_id)
+    wallet   = (identity or {}).get("owner_address")
+    rep      = get_judge_agreement_rate(wallet) if wallet else {
+        "total_validations": 0, "agreement_rate": 0.5, "agreement_count": 0
+    }
     verdicts = get_verdicts_by_judge(agent_id)
     now      = datetime.now(timezone.utc)
 
@@ -833,7 +898,7 @@ async def get_judge_stats(agent_id: str):
 
     return JSONResponse({
         "judge_id":          agent_id,
-        "total_validations": rep["total_validations"],
+        "total_validations": total,
         "agreement_rate":    round(rep["agreement_rate"] * 100, 1),
         "agreement_count":   rep["agreement_count"],
         "avg_score":         avg_score,
@@ -851,7 +916,7 @@ async def get_judge_history(
     offset: int = Query(0,   ge=0),
 ):
     """Paginated list of verdicts issued by this judge agent."""
-    from app.db.access_repo import get_verdicts_by_judge
+    from app.repo.access_repo import get_verdicts_by_judge
 
     all_v = get_verdicts_by_judge(agent_id)
     page  = all_v[offset: offset + limit]
@@ -871,6 +936,8 @@ async def get_judge_history(
             for v in page
         ],
     })
+
+
 
 
 # ── Internal helper ───────────────────────────────────────────────────────────
