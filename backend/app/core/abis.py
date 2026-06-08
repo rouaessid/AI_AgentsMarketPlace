@@ -27,6 +27,24 @@ IDENTITY_REGISTRY_ABI = [
         "stateMutability": "view", "type": "function",
     },
     {
+        "inputs": [{"type": "string", "name": "agentId_"}],
+        "name": "getCurrentTokenId",
+        "outputs": [{"type": "uint256"}],
+        "stateMutability": "view", "type": "function",
+    },
+    {
+        "inputs": [{"type": "uint256", "name": "tokenId_"}],
+        "name": "getAgentWalletByTokenId",
+        "outputs": [{"type": "address"}],
+        "stateMutability": "view", "type": "function",
+    },
+    {
+        "inputs": [{"type": "uint256", "name": "tokenId"}],
+        "name": "getAgentIdByToken",
+        "outputs": [{"type": "string"}],
+        "stateMutability": "view", "type": "function",
+    },
+    {
         "inputs": [
             {"type": "string",  "name": "agentId_"},
             {"type": "uint8",   "name": "agentType_"},
@@ -99,7 +117,7 @@ VALIDATION_REGISTRY_ABI = [
     {
         "inputs": [
             {"type": "string",  "name": "taskId_"},
-            {"type": "string",  "name": "providerAgentId_"},
+            {"type": "uint256", "name": "providerTokenId_"},
             {"type": "string",  "name": "requestURI_"},
             {"type": "bytes32", "name": "requestHash_"},
             {"type": "bytes32", "name": "traceHash_"},
@@ -110,8 +128,8 @@ VALIDATION_REGISTRY_ABI = [
     },
     {
         "inputs": [
-            {"type": "string",   "name": "taskId_"},
-            {"type": "string[]", "name": "candidates_"},
+            {"type": "string",    "name": "taskId_"},
+            {"type": "uint256[]", "name": "candidates_"},
         ],
         "name": "assignJudges", "outputs": [],
         "stateMutability": "nonpayable", "type": "function",
@@ -119,7 +137,7 @@ VALIDATION_REGISTRY_ABI = [
     {
         "inputs": [
             {"type": "string",  "name": "taskId_"},
-            {"type": "string",  "name": "judgeId_"},
+            {"type": "uint256", "name": "judgeTokenId_"},
             {"type": "bytes32", "name": "commitHash_"},
         ],
         "name": "commitVote", "outputs": [],
@@ -128,7 +146,7 @@ VALIDATION_REGISTRY_ABI = [
     {
         "inputs": [
             {"type": "string",  "name": "taskId_"},
-            {"type": "string",  "name": "judgeId_"},
+            {"type": "uint256", "name": "judgeTokenId_"},
             {"type": "uint8",   "name": "vote_"},
             {"type": "bytes32", "name": "salt_"},
             {"type": "uint8",   "name": "taskCompletion_"},
@@ -154,7 +172,7 @@ VALIDATION_REGISTRY_ABI = [
         "stateMutability": "view", "type": "function",
     },
     {
-        "inputs": [{"type": "string", "name": "agentId_"}],
+        "inputs": [{"type": "uint256", "name": "tokenId_"}],
         "name": "getAgentScore",
         "outputs": [
             {"type": "uint256", "name": "averageScore"},
@@ -163,7 +181,7 @@ VALIDATION_REGISTRY_ABI = [
         "stateMutability": "view", "type": "function",
     },
     {
-        "inputs": [{"type": "string", "name": "agentId_"}],
+        "inputs": [{"type": "uint256", "name": "tokenId_"}],
         "name": "getAgentModeScores",
         "outputs": [
             {"type": "uint256", "name": "soloTotal"},
@@ -194,16 +212,16 @@ VALIDATION_REGISTRY_ABI = [
         "stateMutability": "nonpayable", "type": "function",
     },
     {
-        "inputs": [{"type": "string", "name": "judgeId_"}],
+        "inputs": [{"type": "uint256", "name": "judgeTokenId_"}],
         "name": "isJudgeAuthorized",
         "outputs": [{"type": "bool"}],
         "stateMutability": "view", "type": "function",
     },
     {
         "inputs": [
-            {"type": "string", "name": "judgeId_"},
-            {"type": "bool",   "name": "passed_"},
-            {"type": "string", "name": "resultCID_"},
+            {"type": "uint256", "name": "judgeTokenId_"},
+            {"type": "bool",    "name": "passed_"},
+            {"type": "string",  "name": "resultCID_"},
         ],
         "name": "recordHoneypotResult", "outputs": [],
         "stateMutability": "nonpayable", "type": "function",
@@ -212,22 +230,21 @@ VALIDATION_REGISTRY_ABI = [
         "inputs": [{"type": "string", "name": "taskId_"}],
         "name": "getTask",
         "outputs": [{"type": "tuple", "components": [
-            {"type": "string",    "name": "taskId"},
-            {"type": "string",    "name": "providerAgentId"},
-            {"type": "address",   "name": "providerWallet"},
-            {"type": "bytes32",   "name": "requestHash"},
-            {"type": "bytes32",   "name": "traceHash"},
-            {"type": "uint256",   "name": "erc8004AgentId"},
-            {"type": "uint8",     "name": "status"},
-            {"type": "uint256",   "name": "createdAt"},
-            {"type": "uint256",   "name": "commitDeadline"},
-            {"type": "uint256",   "name": "revealDeadline"},
-            {"type": "string[3]", "name": "judgeIds"},
-            {"type": "address[3]","name": "judgeWallets"},
-            {"type": "uint8",     "name": "finalResponse"},
-            {"type": "string",    "name": "finalTag"},
-            {"type": "uint256",   "name": "score"},
-            {"type": "uint8",     "name": "mode"},
+            {"type": "string",      "name": "taskId"},
+            {"type": "uint256",     "name": "providerTokenId"},
+            {"type": "address",     "name": "providerWallet"},
+            {"type": "bytes32",     "name": "requestHash"},
+            {"type": "bytes32",     "name": "traceHash"},
+            {"type": "uint8",       "name": "status"},
+            {"type": "uint256",     "name": "createdAt"},
+            {"type": "uint256",     "name": "commitDeadline"},
+            {"type": "uint256",     "name": "revealDeadline"},
+            {"type": "uint256[3]",  "name": "judgeTokenIds"},
+            {"type": "address[3]",  "name": "judgeWallets"},
+            {"type": "uint8",       "name": "finalResponse"},
+            {"type": "string",      "name": "finalTag"},
+            {"type": "uint256",     "name": "score"},
+            {"type": "uint8",       "name": "mode"},
         ]}],
         "stateMutability": "view", "type": "function",
     },
@@ -235,9 +252,9 @@ VALIDATION_REGISTRY_ABI = [
         "anonymous": False,
         "inputs": [
             {"indexed": True,  "name": "taskId",        "type": "string"},
-            {"indexed": False, "name": "judge0",         "type": "string"},
-            {"indexed": False, "name": "judge1",         "type": "string"},
-            {"indexed": False, "name": "judge2",         "type": "string"},
+            {"indexed": False, "name": "judge0",         "type": "uint256"},
+            {"indexed": False, "name": "judge1",         "type": "uint256"},
+            {"indexed": False, "name": "judge2",         "type": "uint256"},
             {"indexed": False, "name": "commitDeadline", "type": "uint256"},
             {"indexed": False, "name": "revealDeadline", "type": "uint256"},
         ],
@@ -246,7 +263,7 @@ VALIDATION_REGISTRY_ABI = [
     {
         "anonymous": False,
         "inputs": [
-            {"indexed": False, "name": "agentId", "type": "string"},
+            {"indexed": True,  "name": "tokenId", "type": "uint256"},
             {"indexed": False, "name": "taskId",  "type": "string"},
             {"indexed": False, "name": "score",   "type": "uint8"},
             {"indexed": False, "name": "mode",    "type": "uint8"},

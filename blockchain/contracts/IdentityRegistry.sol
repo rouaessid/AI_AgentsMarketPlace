@@ -347,6 +347,25 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         return _tokenToAgentId[tokenId];
     }
 
+    function agentTokenExists(uint256 tokenId_) external view returns (bool) {
+        return _exists(tokenId_);
+    }
+
+    function isActiveByTokenId(uint256 tokenId_) external view returns (bool) {
+        if (!_exists(tokenId_)) return false;
+        return _agents[_tokenToAgentId[tokenId_]].status == AgentStatus.ACTIVE;
+    }
+
+    function getAgentWalletByTokenId(uint256 tokenId_) external view returns (address) {
+        if (!_exists(tokenId_)) revert TokenNotFound(tokenId_);
+        return _agents[_tokenToAgentId[tokenId_]].agentWallet;
+    }
+
+    function getAgentTypeByTokenId(uint256 tokenId_) external view returns (uint8) {
+        if (!_exists(tokenId_)) revert TokenNotFound(tokenId_);
+        return uint8(_agents[_tokenToAgentId[tokenId_]].agentType);
+    }
+
     function getAgentWallet(string calldata agentId_)
         external view agentExists(agentId_)
         returns (address)

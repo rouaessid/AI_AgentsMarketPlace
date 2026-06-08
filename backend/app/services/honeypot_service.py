@@ -29,6 +29,7 @@ logger   = logging.getLogger(__name__)
 settings = get_settings()
 
 from app.core.abis import VALIDATION_REGISTRY_ABI as _HONEYPOT_ABI
+from app.core.abis import IDENTITY_REGISTRY_ABI   as _IDENTITY_ABI
 
 _HONEYPOT_CID_PREFIX = "QmTECHCHECK"
 
@@ -41,6 +42,22 @@ def _get_registry():
         address=Web3.to_checksum_address(settings.validation_registry_address),
         abi=_HONEYPOT_ABI,
     )
+
+
+def _resolve_judge_token_id(agent_id: str) -> int | None:
+    """Resolve agentId string → current tokenId via IdentityRegistry."""
+    if not settings.identity_registry_address or not settings.rpc_url:
+        return None
+    try:
+        w3       = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 4}))
+        identity = w3.eth.contract(
+            address=Web3.to_checksum_address(settings.identity_registry_address),
+            abi=_IDENTITY_ABI,
+        )
+        return int(identity.functions.getCurrentTokenId(agent_id).call())
+    except Exception as exc:
+        logger.warning("[onboarding] Could not resolve tokenId for %s: %s", agent_id, exc)
+        return None
 
 
 def _send_onchain(fn) -> str:
@@ -155,9 +172,13 @@ async def run_onboarding(judge_id: str) -> bool:
         result_cid = f"ipfs://onboarding-{judge_id}-{'pass' if passed else 'fail'}"
 
         if registry:
-            _send_onchain(registry.functions.recordHoneypotResult(
-                judge_id, passed, result_cid
-            ))
+            judge_token_id = _resolve_judge_token_id(judge_id)
+            if judge_token_id is not None:
+                _send_onchain(registry.functions.recordHoneypotResult(
+                    judge_token_id, passed, result_cid
+                ))
+            else:
+                logger.warning("[onboarding] Skipping recordHoneypotResult — tokenId unresolved for %s", judge_id)
 
         # Mise à jour du registration_status en DB et en mémoire
         from app.repo.identity_repo import upsert_agent_identity
@@ -227,7 +248,10 @@ def is_judge_authorized(judge_id: str) -> bool:
         registry = _get_registry()
         if not registry:
             return True  # dev mode — no contract configured
-        return registry.functions.isJudgeAuthorized(judge_id).call()
+        token_id = _resolve_judge_token_id(judge_id)
+        if token_id is None:
+            return True  # can't resolve → fail open
+        return registry.functions.isJudgeAuthorized(token_id).call()
     except Exception as e:
         logger.warning("[onboarding] isJudgeAuthorized RPC failed: %s", e)
         return True  # fail open in dev

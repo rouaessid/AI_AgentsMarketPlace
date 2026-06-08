@@ -49,6 +49,7 @@ MAX_ITER = 100
 EPSILON  = 1e-6
 
 from app.core.abis import VALIDATION_REGISTRY_ABI as _MODE_SCORES_ABI
+from app.core.abis import IDENTITY_REGISTRY_ABI   as _IDENTITY_ABI
 
 
 def _get_mode_scores(agent_id: str) -> tuple[float, float]:
@@ -56,14 +57,19 @@ def _get_mode_scores(agent_id: str) -> tuple[float, float]:
     Return (mean_solo, mean_pipeline) from ValidationRegistry direct RPC.
     Returns (0.0, 0.0) if RPC unavailable or no data.
     """
-    rpc  = settings.rpc_url
-    addr = settings.validation_registry_address
-    if not rpc or not addr:
+    rpc           = settings.rpc_url
+    addr          = settings.validation_registry_address
+    identity_addr = settings.identity_registry_address
+    if not rpc or not addr or not identity_addr:
         return 0.0, 0.0
     try:
-        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 4}))
-        c  = w3.eth.contract(address=Web3.to_checksum_address(addr), abi=_MODE_SCORES_ABI)
-        solo_total, solo_count, pipe_total, pipe_count = c.functions.getAgentModeScores(agent_id).call()
+        w3       = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 4}))
+        identity = w3.eth.contract(
+            address=Web3.to_checksum_address(identity_addr), abi=_IDENTITY_ABI
+        )
+        token_id = identity.functions.getCurrentTokenId(agent_id).call()
+        c        = w3.eth.contract(address=Web3.to_checksum_address(addr), abi=_MODE_SCORES_ABI)
+        solo_total, solo_count, pipe_total, pipe_count = c.functions.getAgentModeScores(token_id).call()
         mean_solo     = (solo_total / solo_count)     if solo_count     else 0.0
         mean_pipeline = (pipe_total / pipe_count)     if pipe_count     else 0.0
         return float(mean_solo), float(mean_pipeline)

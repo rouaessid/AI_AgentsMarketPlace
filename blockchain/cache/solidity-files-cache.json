@@ -155,8 +155,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\IdentityRegistry.sol": {
-      "lastModificationDate": 1780488983536,
-      "contentHash": "7eee0175f3018373017a4ade439d0bf9",
+      "lastModificationDate": 1780912737804,
+      "contentHash": "50ccef524fca6acde3a4687e29d89d92",
       "sourceName": "contracts/IdentityRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1135,8 +1135,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\ValidationRegistry.sol": {
-      "lastModificationDate": 1780776417267,
-      "contentHash": "cb0060d29a7f36d0a371ddbf9a592758",
+      "lastModificationDate": 1780913243667,
+      "contentHash": "94b5077d3b0e904f7a80b19527973c0d",
       "sourceName": "contracts/ValidationRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",

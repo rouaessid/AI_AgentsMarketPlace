@@ -85,14 +85,19 @@ def get_agent(agent_id: str) -> dict | None:
 
 def get_agent_score(agent_id: str) -> dict | None:
     """Return agent validation score via direct RPC from ValidationRegistry."""
-    rpc  = settings.rpc_url
-    addr = settings.validation_registry_address
-    if not rpc or not addr:
+    rpc           = settings.rpc_url
+    addr          = settings.validation_registry_address
+    identity_addr = settings.identity_registry_address
+    if not rpc or not addr or not identity_addr:
         return None
     try:
-        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 4}))
-        c  = w3.eth.contract(address=Web3.to_checksum_address(addr), abi=_VALIDATION_ABI)
-        avg, total = c.functions.getAgentScore(agent_id).call()
+        w3       = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 4}))
+        identity = w3.eth.contract(
+            address=Web3.to_checksum_address(identity_addr), abi=_IDENTITY_REGISTRY_ABI
+        )
+        token_id = identity.functions.getCurrentTokenId(agent_id).call()
+        c        = w3.eth.contract(address=Web3.to_checksum_address(addr), abi=_VALIDATION_ABI)
+        avg, total = c.functions.getAgentScore(token_id).call()
         return {"id": agent_id, "averageScore": avg, "totalTasks": total}
     except Exception as exc:
         logger.warning("get_agent_score RPC failed for %s: %s", agent_id, exc)

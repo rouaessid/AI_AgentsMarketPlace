@@ -18,9 +18,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       }
     ],
     "name": "AlreadyCommitted",
@@ -29,9 +29,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       }
     ],
     "name": "AlreadyRevealed",
@@ -40,9 +40,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       },
       {
         "internalType": "address",
@@ -61,9 +61,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       }
     ],
     "name": "CommitMismatch",
@@ -94,9 +94,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       },
       {
         "internalType": "string",
@@ -159,9 +159,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "agentId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
       }
     ],
     "name": "ProviderIneligible",
@@ -263,9 +263,9 @@
     "inputs": [
       {
         "indexed": false,
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       },
       {
         "indexed": false,
@@ -282,9 +282,9 @@
     "inputs": [
       {
         "indexed": false,
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       },
       {
         "indexed": false,
@@ -326,9 +326,9 @@
     "inputs": [
       {
         "indexed": true,
-        "internalType": "string",
-        "name": "agentId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
       },
       {
         "indexed": true,
@@ -363,21 +363,21 @@
       },
       {
         "indexed": false,
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "judge0",
-        "type": "string"
+        "type": "uint256"
       },
       {
         "indexed": false,
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "judge1",
-        "type": "string"
+        "type": "uint256"
       },
       {
         "indexed": false,
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "judge2",
-        "type": "string"
+        "type": "uint256"
       },
       {
         "indexed": false,
@@ -419,9 +419,9 @@
     "inputs": [
       {
         "indexed": true,
-        "internalType": "string",
-        "name": "agentId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
       },
       {
         "indexed": true,
@@ -443,10 +443,10 @@
     "anonymous": false,
     "inputs": [
       {
-        "indexed": false,
-        "internalType": "string",
-        "name": "agentId",
-        "type": "string"
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
       },
       {
         "indexed": false,
@@ -495,7 +495,7 @@
       {
         "indexed": true,
         "internalType": "uint256",
-        "name": "agentId",
+        "name": "tokenId",
         "type": "uint256"
       },
       {
@@ -526,7 +526,7 @@
       {
         "indexed": true,
         "internalType": "uint256",
-        "name": "agentId",
+        "name": "tokenId",
         "type": "uint256"
       },
       {
@@ -574,9 +574,9 @@
       },
       {
         "indexed": true,
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       }
     ],
     "name": "VoteCommitted",
@@ -593,9 +593,9 @@
       },
       {
         "indexed": true,
-        "internalType": "string",
-        "name": "judgeId",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId",
+        "type": "uint256"
       },
       {
         "indexed": false,
@@ -738,9 +738,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "",
-        "type": "string"
+        "type": "uint256"
       }
     ],
     "name": "_agentPipelineCount",
@@ -757,9 +757,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "",
-        "type": "string"
+        "type": "uint256"
       }
     ],
     "name": "_agentPipelineTotal",
@@ -776,9 +776,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "",
-        "type": "string"
+        "type": "uint256"
       }
     ],
     "name": "_agentSoloCount",
@@ -795,9 +795,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "",
-        "type": "string"
+        "type": "uint256"
       }
     ],
     "name": "_agentSoloTotal",
@@ -819,9 +819,9 @@
         "type": "string"
       },
       {
-        "internalType": "string[]",
+        "internalType": "uint256[]",
         "name": "candidates_",
-        "type": "string[]"
+        "type": "uint256[]"
       }
     ],
     "name": "assignJudges",
@@ -837,9 +837,9 @@
         "type": "string"
       },
       {
-        "internalType": "string",
-        "name": "judgeId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId_",
+        "type": "uint256"
       },
       {
         "internalType": "bytes32",
@@ -899,9 +899,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "agentId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "tokenId_",
+        "type": "uint256"
       }
     ],
     "name": "getAgentModeScores",
@@ -933,9 +933,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "agentId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "tokenId_",
+        "type": "uint256"
       }
     ],
     "name": "getAgentScore",
@@ -958,7 +958,7 @@
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "agentId_",
+        "name": "tokenId_",
         "type": "uint256"
       }
     ],
@@ -976,9 +976,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId_",
+        "type": "uint256"
       }
     ],
     "name": "getJudgeActiveTask",
@@ -1024,9 +1024,9 @@
         "type": "string"
       },
       {
-        "internalType": "string",
-        "name": "judgeId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId_",
+        "type": "uint256"
       }
     ],
     "name": "getJudgeCommit",
@@ -1105,7 +1105,7 @@
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "agentId_",
+        "name": "tokenId_",
         "type": "uint256"
       },
       {
@@ -1153,9 +1153,9 @@
             "type": "string"
           },
           {
-            "internalType": "string",
-            "name": "providerAgentId",
-            "type": "string"
+            "internalType": "uint256",
+            "name": "providerTokenId",
+            "type": "uint256"
           },
           {
             "internalType": "address",
@@ -1171,11 +1171,6 @@
             "internalType": "bytes32",
             "name": "traceHash",
             "type": "bytes32"
-          },
-          {
-            "internalType": "uint256",
-            "name": "erc8004AgentId",
-            "type": "uint256"
           },
           {
             "internalType": "enum ValidationRegistry.TaskStatus",
@@ -1198,9 +1193,9 @@
             "type": "uint256"
           },
           {
-            "internalType": "string[3]",
-            "name": "judgeIds",
-            "type": "string[3]"
+            "internalType": "uint256[3]",
+            "name": "judgeTokenIds",
+            "type": "uint256[3]"
           },
           {
             "internalType": "address[3]",
@@ -1272,7 +1267,7 @@
       },
       {
         "internalType": "uint256",
-        "name": "agentId",
+        "name": "tokenId",
         "type": "uint256"
       },
       {
@@ -1334,9 +1329,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId_",
+        "type": "uint256"
       }
     ],
     "name": "isEligibleJudgeCandidate",
@@ -1353,9 +1348,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId_",
+        "type": "uint256"
       }
     ],
     "name": "isJudgeAuthorized",
@@ -1372,9 +1367,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId_",
+        "type": "uint256"
       }
     ],
     "name": "isJudgeBusy",
@@ -1410,9 +1405,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "",
-        "type": "string"
+        "type": "uint256"
       }
     ],
     "name": "judgeAuthorized",
@@ -1461,9 +1456,9 @@
   {
     "inputs": [
       {
-        "internalType": "string",
-        "name": "judgeId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId_",
+        "type": "uint256"
       },
       {
         "internalType": "bool",
@@ -1484,9 +1479,9 @@
   {
     "inputs": [
       {
-        "internalType": "string[]",
-        "name": "agentIds_",
-        "type": "string[]"
+        "internalType": "uint256[]",
+        "name": "agentTokenIds_",
+        "type": "uint256[]"
       },
       {
         "internalType": "string",
@@ -1519,9 +1514,9 @@
         "type": "string"
       },
       {
-        "internalType": "string",
-        "name": "judgeId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "judgeTokenId_",
+        "type": "uint256"
       },
       {
         "internalType": "enum ValidationRegistry.InternalVote",
@@ -1632,9 +1627,9 @@
         "type": "string"
       },
       {
-        "internalType": "string",
-        "name": "providerAgentId_",
-        "type": "string"
+        "internalType": "uint256",
+        "name": "providerTokenId_",
+        "type": "uint256"
       },
       {
         "internalType": "string",

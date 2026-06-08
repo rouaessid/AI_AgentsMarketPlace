@@ -20,7 +20,7 @@ export function handleScoreRecorded(event: ScoreRecordedEvent): void {
   let entity = new ValidationEvent(
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
-  entity.agentId = event.params.agentId
+  entity.tokenId = event.params.tokenId
   entity.taskId = event.params.taskId
   entity.score = event.params.score
   entity.mode = event.params.mode
@@ -46,7 +46,7 @@ export function handleValidationRequest(event: ValidationRequestEvent): void {
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
   entity.validatorAddress = event.params.validatorAddress
-  entity.agentTokenId = event.params.agentId
+  entity.agentTokenId = event.params.tokenId
   entity.requestURI = event.params.requestURI
   entity.requestHash = event.params.requestHash
   entity.blockNumber = event.block.number
@@ -56,11 +56,13 @@ export function handleValidationRequest(event: ValidationRequestEvent): void {
 }
 
 export function handleHoneypotPassed(event: HoneypotPassedEvent): void {
-  let judgeId = event.params.judgeId
+  let judgeTokenId = event.params.judgeTokenId
+  let statsId = judgeTokenId.toString()
 
-  let stats = JudgeHoneypotStats.load(judgeId)
+  let stats = JudgeHoneypotStats.load(statsId)
   if (stats == null) {
-    stats = new JudgeHoneypotStats(judgeId)
+    stats = new JudgeHoneypotStats(statsId)
+    stats.judgeTokenId  = judgeTokenId
     stats.authorized    = false
     stats.totalPasses   = BigInt.fromI32(0)
     stats.totalFails    = BigInt.fromI32(0)
@@ -77,21 +79,23 @@ export function handleHoneypotPassed(event: HoneypotPassedEvent): void {
   let result = new HoneypotResultEvent(
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
-  result.judgeId    = judgeId
-  result.passed     = true
-  result.resultCID  = event.params.resultCID
-  result.blockNumber = event.block.number
+  result.judgeTokenId = judgeTokenId
+  result.passed       = true
+  result.resultCID    = event.params.resultCID
+  result.blockNumber  = event.block.number
   result.blockTimestamp = event.block.timestamp
   result.transactionHash = event.transaction.hash
   result.save()
 }
 
 export function handleHoneypotFailed(event: HoneypotFailedEvent): void {
-  let judgeId = event.params.judgeId
+  let judgeTokenId = event.params.judgeTokenId
+  let statsId = judgeTokenId.toString()
 
-  let stats = JudgeHoneypotStats.load(judgeId)
+  let stats = JudgeHoneypotStats.load(statsId)
   if (stats == null) {
-    stats = new JudgeHoneypotStats(judgeId)
+    stats = new JudgeHoneypotStats(statsId)
+    stats.judgeTokenId  = judgeTokenId
     stats.authorized    = false
     stats.totalPasses   = BigInt.fromI32(0)
     stats.totalFails    = BigInt.fromI32(0)
@@ -108,10 +112,10 @@ export function handleHoneypotFailed(event: HoneypotFailedEvent): void {
   let result = new HoneypotResultEvent(
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
-  result.judgeId    = judgeId
-  result.passed     = false
-  result.resultCID  = event.params.resultCID
-  result.blockNumber = event.block.number
+  result.judgeTokenId = judgeTokenId
+  result.passed       = false
+  result.resultCID    = event.params.resultCID
+  result.blockNumber  = event.block.number
   result.blockTimestamp = event.block.timestamp
   result.transactionHash = event.transaction.hash
   result.save()
@@ -122,7 +126,7 @@ export function handleValidationResponse(event: ValidationResponseEvent): void {
     event.transaction.hash.concatI32(event.logIndex.toI32())
   )
   entity.validatorAddress = event.params.validatorAddress
-  entity.agentTokenId = event.params.agentId
+  entity.agentTokenId = event.params.tokenId
   entity.requestHash = event.params.requestHash
   entity.response = event.params.response
   entity.responseURI = event.params.responseURI

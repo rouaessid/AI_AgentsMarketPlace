@@ -40,7 +40,7 @@ type EscrowEvent @entity(immutable: true) {
 
 type ValidationEvent @entity(immutable: true) {
   id: Bytes!
-  agentId: String!
+  tokenId: BigInt!
   taskId: String!
   score: Int!
   mode: Int!
@@ -95,7 +95,8 @@ type ValidationResponseEvent @entity(immutable: true) {
 # ── Honeypot ─────────────────────────────────────────────────────────────────
 
 type JudgeHoneypotStats @entity(immutable: false) {
-  id: String!           # judgeId
+  id: String!           # judgeTokenId.toString()
+  judgeTokenId: BigInt!
   authorized: Boolean!  # true si dernier test passé
   totalPasses: BigInt!
   totalFails: BigInt!
@@ -107,7 +108,7 @@ type JudgeHoneypotStats @entity(immutable: false) {
 
 type HoneypotResultEvent @entity(immutable: true) {
   id: Bytes!
-  judgeId: String!
+  judgeTokenId: BigInt!
   passed: Boolean!
   resultCID: String!
   blockNumber: BigInt!

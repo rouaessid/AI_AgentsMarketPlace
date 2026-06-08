@@ -8,9 +8,9 @@ dataSources:
     name: IdentityRegistry
     network: base-sepolia
     source:
-      address: "0xdE24521efdcB483F959939144A03A18BF81416a9"
+      address: "0xD6D8b13c7a77D5010b98FaefC2885Ed5B5F10935"
       abi: IdentityRegistry
-      startBlock: 42496919
+      startBlock: 42572756
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -34,9 +34,9 @@ dataSources:
     name: EscrowManager
     network: base-sepolia
     source:
-      address: "0xA13f7b12430507fa60cA623239693d050Af275E9"
+      address: "0x388C5bA3127FF259E0A2fc7467413EB8E4942376"
       abi: EscrowManager
-      startBlock: 42496919
+      startBlock: 42572756
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -61,9 +61,9 @@ dataSources:
     name: ValidationRegistry
     network: base-sepolia
     source:
-      address: "0x74B3b02C5a5fb9Cae3750c9cc788354FE32Ac062"
+      address: "0xC699E9def97CB3C2949030C13d2264483c4ba07a"
       abi: ValidationRegistry
-      startBlock: 42504078
+      startBlock: 42572756
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -79,7 +79,7 @@ dataSources:
         - name: ValidationRegistry
           file: ./abis/ValidationRegistry.json
       eventHandlers:
-        - event: ScoreRecorded(string,string,uint8,uint8)
+        - event: ScoreRecorded(indexed uint256,string,uint8,uint8)
           handler: handleScoreRecorded
         - event: JudgeScoreUpdated(indexed address,uint256,uint256)
           handler: handleJudgeScoreUpdated
@@ -87,9 +87,9 @@ dataSources:
           handler: handleValidationRequest
         - event: ValidationResponse(indexed address,indexed uint256,indexed bytes32,uint8,string,bytes32,string)
           handler: handleValidationResponse
-        - event: HoneypotPassed(string,string)
+        - event: HoneypotPassed(uint256,string)
           handler: handleHoneypotPassed
-        - event: HoneypotFailed(string,string)
+        - event: HoneypotFailed(uint256,string)
           handler: handleHoneypotFailed
       file: ./src/validation-registry.ts
 
@@ -97,9 +97,9 @@ dataSources:
     name: StakingContract
     network: base-sepolia
     source:
-      address: "0xc2e6eE64B31F759C01903ABf6fDB22081609B150"
+      address: "0xEe08E1E70ED2790173009ea11E36E0e07eDc7fC0"
       abi: StakingContract
-      startBlock: 42496919
+      startBlock: 42572756
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -122,9 +122,9 @@ dataSources:
     name: ReputationRegistry
     network: base-sepolia
     source:
-      address: "0x1EE41Ffd3A1aE5D9405A3aAb8BFE0944507072A4"
+      address: "0xa9E0c4F36B1a94CeafA558Ce570200116df1f90F"
       abi: ReputationRegistry
-      startBlock: 42496919
+      startBlock: 42572756
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9

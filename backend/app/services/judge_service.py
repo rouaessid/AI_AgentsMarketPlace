@@ -275,8 +275,9 @@ async def _run_validation_inner(
         settings.platform_private_key and
         settings.identity_registry_address
     )
-    assigned_ids: list[str] = []
-    judge_keys:   list[str] = []
+    assigned_token_ids: list[int] = []
+    assigned_agent_ids: list[str] = []
+    judge_keys:         list[str] = []
 
     if onchain_enabled:
         _max_setup_attempts = 4
@@ -285,7 +286,7 @@ async def _run_validation_inner(
         for _attempt in range(_max_setup_attempts):
             try:
                 async with _get_onchain_lock():
-                    assigned_ids, judge_keys = await asyncio.wait_for(
+                    assigned_token_ids, judge_keys, assigned_agent_ids = await asyncio.wait_for(
                         loop.run_in_executor(
                             None, _onchain_setup_sync,
                             agent_id, val_task_id, proxy_cid, mode, trace_hash,
@@ -293,7 +294,8 @@ async def _run_validation_inner(
                         ),
                         timeout=120.0,
                     )
-                logger.info("[val] On-chain assigned: %s", assigned_ids)
+                logger.info("[val] On-chain assigned tokenIds=%s agentIds=%s",
+                            assigned_token_ids, assigned_agent_ids)
                 _last_setup_exc = None
                 break
             except Exception as _e:
@@ -311,13 +313,13 @@ async def _run_validation_inner(
             return
     else:
         logger.info("[val] On-chain disabled — using first 3 candidates")
-        assigned_ids = [j.agent_id for j in candidates[:3]]
+        assigned_agent_ids = [j.agent_id for j in candidates[:3]]
 
     # ── 4. Run the on-chain assigned judges ──────────────────────────────
-    id_set          = set(assigned_ids)
+    id_set          = set(assigned_agent_ids)
     assigned_records = sorted(
         [j for j in registered if j.agent_id in id_set],
-        key=lambda j: assigned_ids.index(j.agent_id),
+        key=lambda j: assigned_agent_ids.index(j.agent_id),
     )
     if len(assigned_records) < 3:
         logger.error("[val] Assigned judges not all registered locally (%d/3) — aborting",
@@ -378,7 +380,7 @@ async def _run_validation_inner(
             onchain_ok = await asyncio.wait_for(
                 loop.run_in_executor(
                     None, _onchain_conclude_sync,
-                    val_task_id, results, assigned_ids, judge_keys, justification_uri,
+                    val_task_id, results, assigned_token_ids, assigned_agent_ids, judge_keys, justification_uri,
                 ),
                 timeout=120.0,
             )
@@ -688,11 +690,11 @@ def _read_onchain_verdict(val_task_id: str) -> str | None:
             abi=_VALIDATION_ABI,
         )
         task = registry.functions.getTask(val_task_id).call()
-        # ValidationTask tuple index 13 : taskId(0) providerAgentId(1) providerWallet(2)
-        # requestHash(3) traceHash(4) erc8004AgentId(5) status(6) createdAt(7)
-        # commitDeadline(8) revealDeadline(9) judgeIds(10) judgeWallets(11)
-        # finalResponse(12) finalTag(13) score(14) mode(15)
-        final_tag = task[13] if isinstance(task, (list, tuple)) else getattr(task, "finalTag", None)
+        # ValidationTask tuple index 12 : taskId(0) providerTokenId(1) providerWallet(2)
+        # requestHash(3) traceHash(4) status(5) createdAt(6) commitDeadline(7)
+        # revealDeadline(8) judgeTokenIds(9) judgeWallets(10) finalResponse(11) finalTag(12)
+        # score(13) mode(14)
+        final_tag = task[12] if isinstance(task, (list, tuple)) else getattr(task, "finalTag", None)
         return final_tag if final_tag in ("VALID", "INVALID", "DISPUTED") else None
     except Exception as e:
         # 0x3e0100ea = TaskNotFound(string) — expected before validationRequest is mined
@@ -704,22 +706,44 @@ def _read_onchain_verdict(val_task_id: str) -> str | None:
 # ── On-chain phase 1 : validationRequest + assignJudges ──────────────────────
 
 def _onchain_setup_sync(
-    agent_id:      str,
-    val_task_id:   str,
-    proxy_cid:     str,
-    mode:          int,
-    trace_hash:    bytes,
-    candidate_ids: list[str],
-) -> tuple[list[str], list[str]]:
+    agent_id:           str,
+    val_task_id:        str,
+    proxy_cid:          str,
+    mode:               int,
+    trace_hash:         bytes,
+    candidate_agent_ids: list[str],
+) -> tuple[list[int], list[str], list[str]]:
     """
     Submit validationRequest + assignJudges on-chain.
-    Returns (assigned_judge_ids, judge_private_keys).
+    Resolves agentId strings → tokenIds before all contract calls.
+    Returns (assigned_token_ids, judge_private_keys, assigned_agent_ids).
     """
     w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 10}))
     registry = w3.eth.contract(
         address=Web3.to_checksum_address(settings.validation_registry_address),
         abi=_VALIDATION_ABI,
     )
+    identity = w3.eth.contract(
+        address=Web3.to_checksum_address(settings.identity_registry_address),
+        abi=_IDENTITY_ABI,
+    )
+
+    # Resolve provider agentId → tokenId
+    provider_token_id = identity.functions.getCurrentTokenId(agent_id).call()
+    logger.info("[val] Resolved provider %s → tokenId=%d", agent_id, provider_token_id)
+
+    # Resolve candidate agentIds → tokenIds
+    candidate_token_ids: list[int] = []
+    for cid in candidate_agent_ids:
+        try:
+            tid = identity.functions.getCurrentTokenId(cid).call()
+            candidate_token_ids.append(tid)
+        except Exception as _e:
+            logger.warning("[val] Could not resolve candidate %s to tokenId: %s", cid, _e)
+    if len(candidate_token_ids) < 3:
+        raise RuntimeError(
+            f"Not enough resolvable candidate tokenIds ({len(candidate_token_ids)}/3)"
+        )
 
     req_hash = bytes(Web3.keccak(text=f"{agent_id}|{proxy_cid}"))
     ipfs_uri = f"ipfs://{proxy_cid}"
@@ -735,7 +759,7 @@ def _onchain_setup_sync(
         pass
 
     if _preexisting is not None:
-        status = _preexisting[6]
+        status = _preexisting[5]
         if status in (1, 2):
             logger.warning("[val] Task %s stuck (status=%d) — expiring", val_task_id, status)
             try:
@@ -752,7 +776,7 @@ def _onchain_setup_sync(
     if _preexisting is None:
         txh_vr, _ = _send(w3, settings.platform_private_key,
                           registry.functions.validationRequest(
-                              val_task_id, agent_id, ipfs_uri, req_hash, th, mode))
+                              val_task_id, provider_token_id, ipfs_uri, req_hash, th, mode))
         logger.info("[val] validationRequest TX=%s", txh_vr)
         for _attempt in range(3):
             try:
@@ -765,45 +789,58 @@ def _onchain_setup_sync(
                 time.sleep(3)
 
     txh_aj, aj_receipt = _send(w3, settings.platform_private_key,
-                               registry.functions.assignJudges(val_task_id, candidate_ids),
+                               registry.functions.assignJudges(val_task_id, candidate_token_ids),
                                gas=600_000)
     logger.info("[val] assignJudges TX=%s", txh_aj)
 
     try:
-        _ev        = registry.events.JudgesAssigned().process_receipt(aj_receipt)[0]["args"]
-        judge_ids  = [_ev["judge0"], _ev["judge1"], _ev["judge2"]]
-        logger.info("[val] On-chain assigned judges: %s  commit=%d reveal=%d",
-                    judge_ids, _ev["commitDeadline"], _ev["revealDeadline"])
+        _ev             = registry.events.JudgesAssigned().process_receipt(aj_receipt)[0]["args"]
+        judge_token_ids = [int(_ev["judge0"]), int(_ev["judge1"]), int(_ev["judge2"])]
+        logger.info("[val] On-chain assigned tokenIds: %s  commit=%d reveal=%d",
+                    judge_token_ids, _ev["commitDeadline"], _ev["revealDeadline"])
     except Exception as _ep:
         logger.warning("[val] JudgesAssigned event parse failed — fallback getTask: %s", _ep)
-        task_state = registry.functions.getTask(val_task_id).call()
-        judge_ids  = list(task_state[10])
-        logger.info("[val] On-chain assigned judges (getTask): %s", judge_ids)
+        task_state      = registry.functions.getTask(val_task_id).call()
+        judge_token_ids = [int(t) for t in task_state[9]]
+        logger.info("[val] On-chain assigned tokenIds (getTask): %s", judge_token_ids)
 
-    identity = w3.eth.contract(
-        address=Web3.to_checksum_address(settings.identity_registry_address),
-        abi=_IDENTITY_ABI,
-    )
-    judge_keys = _resolve_judge_keys(identity, judge_ids, _build_wallet_key_map())
-    return judge_ids, judge_keys
+    # Reverse-resolve tokenIds → agentIds
+    assigned_agent_ids: list[str] = []
+    for tid in judge_token_ids:
+        try:
+            aid = identity.functions.getAgentIdByToken(tid).call()
+            assigned_agent_ids.append(aid)
+        except Exception as _e:
+            logger.warning("[val] Could not reverse-resolve tokenId=%d: %s", tid, _e)
+            assigned_agent_ids.append(str(tid))
+
+    judge_keys = _resolve_judge_keys(identity, judge_token_ids, _build_wallet_key_map())
+    return judge_token_ids, judge_keys, assigned_agent_ids
 
 
-def _resolve_judge_keys(identity, judge_ids: list[str], wallet_key_map: dict) -> list[str]:
-    """Return private keys for each judge using owner_address from in-memory cache."""
+def _resolve_judge_keys(identity, judge_token_ids: list[int], wallet_key_map: dict) -> list[str]:
+    """Return private keys for each judge, using tokenId for on-chain wallet lookup."""
     from app.services.agent_service import get_agent_from_cache
     keys = []
-    for jid in judge_ids:
-        cached = get_agent_from_cache(jid)
-        wallet = (cached.get("owner_address") or "").lower() if cached else ""
+    for tid in judge_token_ids:
+        wallet = ""
+        # Try cache first: resolve tokenId → agentId, then look up cached wallet
+        try:
+            aid    = identity.functions.getAgentIdByToken(tid).call()
+            cached = get_agent_from_cache(aid)
+            wallet = (cached.get("owner_address") or "").lower() if cached else ""
+        except Exception:
+            pass
+        # Fallback: direct on-chain wallet lookup by tokenId
         if not wallet:
             try:
-                wallet = identity.functions.getAgentWallet(jid).call().lower()
+                wallet = identity.functions.getAgentWalletByTokenId(tid).call().lower()
             except Exception:
                 pass
         key = wallet_key_map.get(wallet)
         if not key:
             raise RuntimeError(
-                f"No private key for judge {jid} (owner={wallet}). "
+                f"No private key for judge tokenId={tid} (wallet={wallet}). "
                 f"Add JUDGE_WALLET_KEYS={{'{wallet}':'0xKEY'}} to .env"
             )
         keys.append(key)
@@ -815,12 +852,15 @@ def _resolve_judge_keys(identity, judge_ids: list[str], wallet_key_map: dict) ->
 def _onchain_conclude_sync(
     val_task_id:       str,
     results:           list[JudgeResult],
-    judge_ids:         list[str],
+    judge_token_ids:   list[int],
+    judge_agent_ids:   list[str],
     judge_keys:        list[str],
     justification_uri: str,
 ) -> bool:
     """
     Submit commits, reveals, then finaliseValidation.
+    judge_token_ids: on-chain uint256 tokenIds (for contract calls).
+    judge_agent_ids: string agentIds (for matching JudgeResult objects).
     Returns True on success.
     """
     try:
@@ -832,12 +872,12 @@ def _onchain_conclude_sync(
 
         result_map = {r.judge_id: r for r in results}
 
-        # Build commit hashes
+        # Build commit hashes (indexed by agentId for result lookup)
         salts: list[bytes] = []
         judge_data: list[tuple] = []
         commit_hashes: list[bytes] = []
-        for jid in judge_ids:
-            res = result_map.get(jid)
+        for agent_id in judge_agent_ids:
+            res = result_map.get(agent_id)
             if res and res.criteria:
                 vote = _VOTE_VALID if res.verdict == "VALID" else _VOTE_INVALID
                 tc = res.criteria.get("task_completion", 0)
@@ -845,7 +885,7 @@ def _onchain_conclude_sync(
                 nf = res.criteria.get("no_fabrication",  0)
                 tu = res.criteria.get("tool_usage",      0)
             else:
-                logger.warning("[val] Judge %s has no result (shouldn't happen)", jid)
+                logger.warning("[val] Judge %s has no result (shouldn't happen)", agent_id)
                 vote = _VOTE_INVALID
                 tc = oq = nf = tu = 0
             salt = secrets.token_bytes(32)
@@ -856,22 +896,23 @@ def _onchain_conclude_sync(
                            [vote, tc, oq, nf, tu, salt])
             )))
 
-        # Fire-and-forget commits
+        # Fire-and-forget commits (use tokenIds for contract calls)
         _wallet_nonce: dict[str, int] = {}
         _commit_pending: list[tuple] = []
-        for key, jid, chash in zip(judge_keys, judge_ids, commit_hashes):
+        for key, tid, agent_id, chash in zip(judge_keys, judge_token_ids, judge_agent_ids, commit_hashes):
             _acct = w3.eth.account.from_key(key)
             _addr = _acct.address
             if _addr not in _wallet_nonce:
                 _wallet_nonce[_addr] = w3.eth.get_transaction_count(_addr, "pending")
             _nonce = _wallet_nonce[_addr]; _wallet_nonce[_addr] += 1
-            _fn  = registry.functions.commitVote(val_task_id, jid, chash)
+            _fn  = registry.functions.commitVote(val_task_id, tid, chash)
             _tx  = _fn.build_transaction({"from": _addr, "nonce": _nonce,
                                            "gas": 1_200_000, "gasPrice": w3.eth.gas_price})
             _sig = w3.eth.account.sign_transaction(_tx, key)
             _txh = w3.eth.send_raw_transaction(_sig.raw_transaction)
             _commit_pending.append((_txh, _tx))
-            logger.info("[val] commitVote submitted: jid=%s nonce=%d txh=%s", jid, _nonce, _txh.hex())
+            logger.info("[val] commitVote submitted: tokenId=%d agent=%s nonce=%d txh=%s",
+                        tid, agent_id, _nonce, _txh.hex())
 
         for _txh, _tx in _commit_pending:
             _rcpt = w3.eth.wait_for_transaction_receipt(_txh, timeout=120)
@@ -884,22 +925,22 @@ def _onchain_conclude_sync(
                 raise RuntimeError(f"commitVote reverted (no reason): {_txh.hex()}")
         logger.info("[val] All commits confirmed")
 
-        # Fire-and-forget reveals
+        # Fire-and-forget reveals (use tokenIds for contract calls)
         _wallet_nonce = {}
         _reveal_pending: list[tuple] = []
-        for key, jid, salt, (vote, tc, oq, nf, tu) in zip(judge_keys, judge_ids, salts, judge_data):
+        for key, tid, salt, (vote, tc, oq, nf, tu) in zip(judge_keys, judge_token_ids, salts, judge_data):
             _acct = w3.eth.account.from_key(key)
             _addr = _acct.address
             if _addr not in _wallet_nonce:
                 _wallet_nonce[_addr] = w3.eth.get_transaction_count(_addr, "pending")
             _nonce = _wallet_nonce[_addr]; _wallet_nonce[_addr] += 1
-            _fn  = registry.functions.revealVote(val_task_id, jid, vote, salt, tc, oq, nf, tu)
+            _fn  = registry.functions.revealVote(val_task_id, tid, vote, salt, tc, oq, nf, tu)
             _tx  = _fn.build_transaction({"from": _addr, "nonce": _nonce,
                                            "gas": 1_200_000, "gasPrice": w3.eth.gas_price})
             _sig = w3.eth.account.sign_transaction(_tx, key)
             _txh = w3.eth.send_raw_transaction(_sig.raw_transaction)
             _reveal_pending.append((_txh, _tx))
-            logger.info("[val] revealVote submitted: jid=%s nonce=%d txh=%s", jid, _nonce, _txh.hex())
+            logger.info("[val] revealVote submitted: tokenId=%d nonce=%d txh=%s", tid, _nonce, _txh.hex())
 
         for _txh, _tx in _reveal_pending:
             _rcpt = w3.eth.wait_for_transaction_receipt(_txh, timeout=120)

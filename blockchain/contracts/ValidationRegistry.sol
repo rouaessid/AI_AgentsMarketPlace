@@ -12,8 +12,11 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 //
 //  Flux : validationRequest → assignJudges → commitVote → revealVote → finaliseValidation
 //
+//  Identifiants : tous les agents sont référencés par tokenId (uint256 ERC-721).
+//  Le backend résout agentId → tokenId via IdentityRegistry avant tout appel.
+//
 //  Contrats liés :
-//    IdentityRegistry   → identité + type + wallet des agents
+//    IdentityRegistry   → identité + type + wallet des agents (via tokenId)
 //    StakingContract    → éligibilité + lock/unlock/slash des stakes
 //    ReputationRegistry → écriture des scores après consensus
 //    EscrowManager      → libération/remboursement des paiements
@@ -22,11 +25,10 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
 interface IIdentityRegistry {
-    function isActive(string calldata agentId)       external view returns (bool);
-    function agentIdExists(string calldata agentId)  external view returns (bool);
-    function getAgentWallet(string calldata agentId) external view returns (address);
-    function getAgentType(string calldata agentId)   external view returns (uint8);
-    function getCurrentTokenId(string calldata agentId) external view returns (uint256);
+    function isActiveByTokenId(uint256 tokenId)         external view returns (bool);
+    function agentTokenExists(uint256 tokenId)          external view returns (bool);
+    function getAgentWalletByTokenId(uint256 tokenId)   external view returns (address);
+    function getAgentTypeByTokenId(uint256 tokenId)     external view returns (uint8);
 }
 
 interface IStakingContract {
@@ -73,27 +75,26 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     }
 
     struct ValidationTask {
-        string  taskId;
-        string  providerAgentId;
-        address providerWallet;
-        bytes32 requestHash;
-        bytes32 traceHash;      // keccak256(trace JSON) — vérifiable par les juges
-        uint256 erc8004AgentId; // tokenId ERC-721 du provider
+        string     taskId;
+        uint256    providerTokenId;  // tokenId ERC-721 du provider
+        address    providerWallet;
+        bytes32    requestHash;
+        bytes32    traceHash;        // keccak256(trace JSON) — vérifiable par les juges
         TaskStatus status;
         uint256    createdAt;
         uint256    commitDeadline;
         uint256    revealDeadline;
-        string[3]  judgeIds;
+        uint256[3] judgeTokenIds;    // tokenIds ERC-721 des 3 juges
         address[3] judgeWallets;
-        uint8   finalResponse;  // 0=INVALID 50=DISPUTED 100=VALID
-        string  finalTag;       // "VALID" | "INVALID" | "DISPUTED" | "EXPIRED"
-        uint256 score;          // score agrégé 0-100
-        uint8   mode;           // 0=solo 1=pipeline
+        uint8      finalResponse;    // 0=INVALID 50=DISPUTED 100=VALID
+        string     finalTag;         // "VALID" | "INVALID" | "DISPUTED" | "EXPIRED"
+        uint256    score;            // score agrégé 0-100
+        uint8      mode;             // 0=solo 1=pipeline
     }
 
     struct ValidationRecord {
         address validatorAddress; // toujours address(this)
-        uint256 agentId;          // tokenId ERC-721
+        uint256 tokenId;          // tokenId ERC-721 du provider
         uint8   response;         // 0-100
         bytes32 responseHash;
         string  tag;
@@ -118,48 +119,46 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
 
     // ── State Variables ───────────────────────────────────────────────────────
 
-    // Contrats liés
     IIdentityRegistry   public identityRegistry;
     IStakingContract    public stakingContract;
     IEscrowManager      public escrowManager;
 
-    // Scores séparés par mode — source unique pour scores et matrice C EigenTrust
-    mapping(string  => uint256) public _agentSoloTotal;
-    mapping(string  => uint256) public _agentSoloCount;
-    mapping(string  => uint256) public _agentPipelineTotal;
-    mapping(string  => uint256) public _agentPipelineCount;
+    // Scores par tokenId — source pour EigenTrust
+    mapping(uint256 => uint256) public _agentSoloTotal;
+    mapping(uint256 => uint256) public _agentSoloCount;
+    mapping(uint256 => uint256) public _agentPipelineTotal;
+    mapping(uint256 => uint256) public _agentPipelineCount;
 
     // Taux d'accord des juges (on-chain)
     mapping(address => uint256) public judgeAgreements;
     mapping(address => uint256) public judgeTotalVotes;
 
-    // ── Honeypot — autorisation des juges ─────────────────────────────────────
-    mapping(string => bool) public judgeAuthorized;  // judgeId → test technique passé
+    // Honeypot — autorisation des juges
+    mapping(uint256 => bool) public judgeAuthorized;  // judgeTokenId → honeypot passé
 
     // Tâches de validation
-    mapping(string  => ValidationTask)                 private _tasks;
-    mapping(string  => bool)                           private _taskExists;
-    mapping(string  => mapping(string => JudgeCommit)) private _commits;
-    mapping(string  => string)                         private _judgeActiveTask;
+    mapping(string  => ValidationTask)                  private _tasks;
+    mapping(string  => bool)                            private _taskExists;
+    mapping(string  => mapping(uint256 => JudgeCommit)) private _commits;
+    mapping(uint256 => string)                          private _judgeActiveTask;
 
     // ERC-8004 stockage
     mapping(bytes32 => ValidationRecord) private _validationRecords;
     mapping(uint256 => bytes32[])        private _agentValidations;  // tokenId → requestHashes
-    mapping(address => bytes32[])        private _validatorRequests; // validatorAddress → requestHashes
+    mapping(address => bytes32[])        private _validatorRequests;
 
     // ── Events ────────────────────────────────────────────────────────────────
 
-    // ERC-8004
     event ValidationRequest(
         address indexed validatorAddress,
-        uint256 indexed agentId,
+        uint256 indexed tokenId,
         string          requestURI,
         bytes32 indexed requestHash
     );
 
     event ValidationResponse(
         address indexed validatorAddress,
-        uint256 indexed agentId,
+        uint256 indexed tokenId,
         bytes32 indexed requestHash,
         uint8           response,
         string          responseURI,
@@ -167,36 +166,33 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         string          tag
     );
 
-    // Internes
-    event JudgesAssigned(string indexed taskId, string judge0, string judge1, string judge2, uint256 commitDeadline, uint256 revealDeadline);
-    event VoteCommitted(string indexed taskId, string indexed judgeId);
-    event VoteRevealed(string indexed taskId, string indexed judgeId, InternalVote vote, uint8 taskCompletion, uint8 outputQuality, uint8 noFabrication, uint8 toolUsage);
-    event ScoreRecorded(string agentId, string taskId, uint8 score, uint8 mode);
+    event JudgesAssigned(string indexed taskId, uint256 judge0, uint256 judge1, uint256 judge2, uint256 commitDeadline, uint256 revealDeadline);
+    event VoteCommitted(string indexed taskId, uint256 indexed judgeTokenId);
+    event VoteRevealed(string indexed taskId, uint256 indexed judgeTokenId, InternalVote vote, uint8 taskCompletion, uint8 outputQuality, uint8 noFabrication, uint8 toolUsage);
+    event ScoreRecorded(uint256 indexed tokenId, string taskId, uint8 score, uint8 mode);
     event JudgeScoreUpdated(address indexed judgeWallet, uint256 agreementRate, uint256 totalVotes);
-    event ProviderSlashed(string indexed agentId, address indexed wallet, uint256 amount);
-    event JudgeSlashed(string indexed agentId, address indexed wallet, uint256 amount, string reason);
+    event ProviderSlashed(uint256 indexed tokenId, address indexed wallet, uint256 amount);
+    event JudgeSlashed(uint256 indexed tokenId, address indexed wallet, uint256 amount, string reason);
     event TaskExpired(string indexed taskId);
-
-    // Honeypot events
-    event HoneypotPassed(string judgeId, string resultCID);
-    event HoneypotFailed(string judgeId, string resultCID);
+    event HoneypotPassed(uint256 judgeTokenId, string resultCID);
+    event HoneypotFailed(uint256 judgeTokenId, string resultCID);
 
     // ── Errors ────────────────────────────────────────────────────────────────
 
     error TaskNotFound(string taskId);
     error TaskAlreadyExists(string taskId);
     error WrongStatus(string taskId, TaskStatus current);
-    error NotAJudgeOfTask(string judgeId, string taskId);
-    error AlreadyCommitted(string judgeId);
-    error AlreadyRevealed(string judgeId);
-    error CommitMismatch(string judgeId);
+    error NotAJudgeOfTask(uint256 judgeTokenId, string taskId);
+    error AlreadyCommitted(uint256 judgeTokenId);
+    error AlreadyRevealed(uint256 judgeTokenId);
+    error CommitMismatch(uint256 judgeTokenId);
     error VoteIsNone();
     error CommitWindowClosed(string taskId);
     error CommitWindowStillOpen(string taskId);
     error RevealWindowClosed(string taskId);
     error RevealWindowStillOpen(string taskId);
-    error CallerNotJudgeWallet(string judgeId, address caller, address expected);
-    error ProviderIneligible(string agentId);
+    error CallerNotJudgeWallet(uint256 judgeTokenId, address caller, address expected);
+    error ProviderIneligible(uint256 tokenId);
     error NotEnoughEligibleJudges(uint256 found, uint256 required);
     error TooManyCandidates(uint256 given, uint256 max);
     error NotExpirable(string taskId);
@@ -223,44 +219,29 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
 
     // ── Honeypot ──────────────────────────────────────────────────────────────
 
-    /**
-     * @notice Enregistre le résultat d'un honeypot pour un juge.
-     *         Appelé par le backend (onlyOwner) après chaque vérification.
-     * @param judgeId_   agentId du juge
-     * @param passed_    true = honeypot réussi
-     * @param resultCID_ IPFS CID du document de résultat
-     */
     function recordHoneypotResult(
-        string calldata judgeId_,
+        uint256         judgeTokenId_,
         bool            passed_,
         string calldata resultCID_
     ) external onlyOwner {
-        judgeAuthorized[judgeId_] = passed_;
-        if (passed_) emit HoneypotPassed(judgeId_, resultCID_);
-        else         emit HoneypotFailed(judgeId_, resultCID_);
+        judgeAuthorized[judgeTokenId_] = passed_;
+        if (passed_) emit HoneypotPassed(judgeTokenId_, resultCID_);
+        else         emit HoneypotFailed(judgeTokenId_, resultCID_);
     }
 
-    /**
-     * @notice Retourne true si le juge est autorisé à valider.
-     */
-    function isJudgeAuthorized(string calldata judgeId_) external view returns (bool) {
-        return judgeAuthorized[judgeId_];
+    function isJudgeAuthorized(uint256 judgeTokenId_) external view returns (bool) {
+        return judgeAuthorized[judgeTokenId_];
     }
 
     // ── External — Validation Flow ────────────────────────────────────────────
 
     /**
      * @notice Étape 1 — Soumet un résultat pour validation.
-     * @param taskId_          ID unique de la tâche
-     * @param providerAgentId_ agentId du provider (IdentityRegistry)
-     * @param requestURI_      IPFS URI du résultat complet
-     * @param requestHash_     keccak256(résultat) = evidenceHash
-     * @param traceHash_       keccak256(trace JSON) — vérifiable par les juges
-     * @param mode_            0=solo 1=pipeline
+     * @param providerTokenId_ tokenId ERC-721 du provider (capturé par le backend au début de l'exécution)
      */
     function validationRequest(
         string  calldata taskId_,
-        string  calldata providerAgentId_,
+        uint256          providerTokenId_,
         string  calldata requestURI_,
         bytes32          requestHash_,
         bytes32          traceHash_,
@@ -268,22 +249,20 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     ) external nonReentrant {
         if (_taskExists[taskId_]) revert TaskAlreadyExists(taskId_);
 
-        if (!identityRegistry.isActive(providerAgentId_)) revert ProviderIneligible(providerAgentId_);
-        if (identityRegistry.getAgentType(providerAgentId_) != AGENT_TYPE_PROVIDER) revert ProviderIneligible(providerAgentId_);
+        if (!identityRegistry.isActiveByTokenId(providerTokenId_))                      revert ProviderIneligible(providerTokenId_);
+        if (identityRegistry.getAgentTypeByTokenId(providerTokenId_) != AGENT_TYPE_PROVIDER) revert ProviderIneligible(providerTokenId_);
 
-        address providerWallet = identityRegistry.getAgentWallet(providerAgentId_);
-        if (!stakingContract.isEligibleProvider(providerWallet)) revert ProviderIneligible(providerAgentId_);
+        address providerWallet = identityRegistry.getAgentWalletByTokenId(providerTokenId_);
+        if (!stakingContract.isEligibleProvider(providerWallet)) revert ProviderIneligible(providerTokenId_);
 
-        uint256 erc8004AgentId = identityRegistry.getCurrentTokenId(providerAgentId_);
         stakingContract.lockStake(providerWallet, STAKE_LOCK_DURATION);
 
         ValidationTask storage t = _tasks[taskId_];
         t.taskId          = taskId_;
-        t.providerAgentId = providerAgentId_;
+        t.providerTokenId = providerTokenId_;
         t.providerWallet  = providerWallet;
         t.requestHash     = requestHash_;
         t.traceHash       = traceHash_;
-        t.erc8004AgentId  = erc8004AgentId;
         t.status          = TaskStatus.PENDING;
         t.createdAt       = block.timestamp;
         t.mode            = mode_;
@@ -291,34 +270,33 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
 
         _validationRecords[requestHash_] = ValidationRecord({
             validatorAddress: address(this),
-            agentId:          erc8004AgentId,
+            tokenId:          providerTokenId_,
             response:         0,
             responseHash:     bytes32(0),
             tag:              "PENDING",
             responseURI:      "",
             lastUpdate:       block.timestamp
         });
-        _agentValidations[erc8004AgentId].push(requestHash_);
+        _agentValidations[providerTokenId_].push(requestHash_);
         _validatorRequests[address(this)].push(requestHash_);
 
-        emit ValidationRequest(address(this), erc8004AgentId, requestURI_, requestHash_);
+        emit ValidationRequest(address(this), providerTokenId_, requestURI_, requestHash_);
     }
 
     /**
      * @notice Étape 2 — Assigne 3 juges parmi les candidats proposés.
-     *         Fisher-Yates on-chain. Vérifie 6 critères d'éligibilité par candidat.
-     * @param candidates_ agentIds proposés (≥ JUDGE_COUNT, ≤ MAX_CANDIDATES)
+     * @param candidates_ tokenIds des juges candidats (≥ JUDGE_COUNT, ≤ MAX_CANDIDATES)
      */
     function assignJudges(
-        string calldata   taskId_,
-        string[] calldata candidates_
+        string    calldata taskId_,
+        uint256[] calldata candidates_
     ) external onlyOwner nonReentrant {
         ValidationTask storage t = _getTask(taskId_);
 
         if (t.status != TaskStatus.PENDING) revert WrongStatus(taskId_, t.status);
         if (candidates_.length > MAX_CANDIDATES) revert TooManyCandidates(candidates_.length, MAX_CANDIDATES);
 
-        string[20] memory eligible;
+        uint256[20] memory eligible;
         uint256 eligibleCount = 0;
         for (uint256 i = 0; i < candidates_.length; i++) {
             if (eligibleCount == MAX_CANDIDATES) break;
@@ -332,15 +310,15 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         for (uint8 i = 0; i < JUDGE_COUNT; i++) {
             uint256 swapIdx    = i + (seed % (eligibleCount - i));
             seed               = uint256(keccak256(abi.encodePacked(seed)));
-            string memory tmp  = eligible[i];
+            uint256 tmp        = eligible[i];
             eligible[i]        = eligible[swapIdx];
             eligible[swapIdx]  = tmp;
 
-            string memory judgeId    = eligible[i];
-            address       judgeWallet = identityRegistry.getAgentWallet(judgeId);
-            t.judgeIds[i]     = judgeId;
-            t.judgeWallets[i] = judgeWallet;
-            _judgeActiveTask[judgeId] = taskId_;
+            uint256 judgeTokenId = eligible[i];
+            address judgeWallet  = identityRegistry.getAgentWalletByTokenId(judgeTokenId);
+            t.judgeTokenIds[i]   = judgeTokenId;
+            t.judgeWallets[i]    = judgeWallet;
+            _judgeActiveTask[judgeTokenId] = taskId_;
             stakingContract.lockStake(judgeWallet, STAKE_LOCK_DURATION);
         }
 
@@ -348,16 +326,15 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         t.commitDeadline = block.timestamp + COMMIT_WINDOW;
         t.revealDeadline = t.commitDeadline + REVEAL_WINDOW;
 
-        emit JudgesAssigned(taskId_, t.judgeIds[0], t.judgeIds[1], t.judgeIds[2], t.commitDeadline, t.revealDeadline);
+        emit JudgesAssigned(taskId_, t.judgeTokenIds[0], t.judgeTokenIds[1], t.judgeTokenIds[2], t.commitDeadline, t.revealDeadline);
     }
 
     /**
      * @notice Étape 3 — Juge soumet son vote hashé.
-     * @param commitHash_ keccak256(abi.encode(vote, scores×4, salt))
      */
     function commitVote(
         string  calldata taskId_,
-        string  calldata judgeId_,
+        uint256          judgeTokenId_,
         bytes32          commitHash_
     ) external nonReentrant {
         ValidationTask storage t = _getTask(taskId_);
@@ -365,17 +342,17 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         if (t.status != TaskStatus.COMMITTING) revert WrongStatus(taskId_, t.status);
         if (block.timestamp > t.commitDeadline) revert CommitWindowClosed(taskId_);
 
-        uint256 idx      = _judgeIndexOf(t, judgeId_);
+        uint256 idx      = _judgeIndexOf(t, judgeTokenId_);
         address expected = t.judgeWallets[idx];
-        if (msg.sender != expected) revert CallerNotJudgeWallet(judgeId_, msg.sender, expected);
+        if (msg.sender != expected) revert CallerNotJudgeWallet(judgeTokenId_, msg.sender, expected);
 
-        JudgeCommit storage c = _commits[taskId_][judgeId_];
-        if (c.committed) revert AlreadyCommitted(judgeId_);
+        JudgeCommit storage c = _commits[taskId_][judgeTokenId_];
+        if (c.committed) revert AlreadyCommitted(judgeTokenId_);
 
         c.commitHash = commitHash_;
         c.committed  = true;
 
-        emit VoteCommitted(taskId_, judgeId_);
+        emit VoteCommitted(taskId_, judgeTokenId_);
         if (_allCommitted(t)) t.status = TaskStatus.REVEALING;
     }
 
@@ -384,7 +361,7 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
      */
     function revealVote(
         string       calldata taskId_,
-        string       calldata judgeId_,
+        uint256               judgeTokenId_,
         InternalVote          vote_,
         bytes32               salt_,
         uint8                 taskCompletion_,
@@ -403,16 +380,16 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         if (vote_ == InternalVote.NONE) revert VoteIsNone();
         require(taskCompletion_ <= 25 && outputQuality_ <= 25 && noFabrication_ <= 25 && toolUsage_ <= 25, "Score out of range");
 
-        uint256 idx      = _judgeIndexOf(t, judgeId_);
+        uint256 idx      = _judgeIndexOf(t, judgeTokenId_);
         address expected = t.judgeWallets[idx];
-        if (msg.sender != expected) revert CallerNotJudgeWallet(judgeId_, msg.sender, expected);
+        if (msg.sender != expected) revert CallerNotJudgeWallet(judgeTokenId_, msg.sender, expected);
 
-        JudgeCommit storage c = _commits[taskId_][judgeId_];
-        if (!c.committed) revert NotAJudgeOfTask(judgeId_, taskId_);
-        if (c.revealed)   revert AlreadyRevealed(judgeId_);
+        JudgeCommit storage c = _commits[taskId_][judgeTokenId_];
+        if (!c.committed) revert NotAJudgeOfTask(judgeTokenId_, taskId_);
+        if (c.revealed)   revert AlreadyRevealed(judgeTokenId_);
 
         if (keccak256(abi.encode(vote_, taskCompletion_, outputQuality_, noFabrication_, toolUsage_, salt_)) != c.commitHash)
-            revert CommitMismatch(judgeId_);
+            revert CommitMismatch(judgeTokenId_);
 
         c.vote           = vote_;
         c.taskCompletion = taskCompletion_;
@@ -421,13 +398,11 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         c.toolUsage      = toolUsage_;
         c.revealed       = true;
 
-        emit VoteRevealed(taskId_, judgeId_, vote_, taskCompletion_, outputQuality_, noFabrication_, toolUsage_);
+        emit VoteRevealed(taskId_, judgeTokenId_, vote_, taskCompletion_, outputQuality_, noFabrication_, toolUsage_);
     }
 
     /**
      * @notice Étape 5 — Clôture la validation, calcule le consensus on-chain.
-     *         Appelable par n'importe qui après la deadline ou quand tous ont révélé.
-     * @param justificationURI_ IPFS URI du document JSON agrégé des justifications juges
      */
     function finaliseValidation(
         string calldata taskId_,
@@ -443,7 +418,7 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         bool[3] memory votedValid; bool[3] memory didReveal;
 
         for (uint8 i = 0; i < JUDGE_COUNT; i++) {
-            JudgeCommit storage c = _commits[taskId_][t.judgeIds[i]];
+            JudgeCommit storage c = _commits[taskId_][t.judgeTokenIds[i]];
             if (!c.revealed) continue;
             didReveal[i] = true; revealCount++;
             totalScore  += uint256(c.taskCompletion) + uint256(c.outputQuality) + uint256(c.noFabrication) + uint256(c.toolUsage);
@@ -461,17 +436,17 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         t.finalResponse = erc8004Response; t.finalTag = tag;
         t.score         = aggregatedScore; t.status   = TaskStatus.FINALISED;
 
-        emit ScoreRecorded(t.providerAgentId, taskId_, uint8(aggregatedScore), t.mode);
+        emit ScoreRecorded(t.providerTokenId, taskId_, uint8(aggregatedScore), t.mode);
 
         if (t.mode == 0) {
-            _agentSoloTotal[t.providerAgentId] += aggregatedScore;
-            _agentSoloCount[t.providerAgentId] += 1;
+            _agentSoloTotal[t.providerTokenId] += aggregatedScore;
+            _agentSoloCount[t.providerTokenId] += 1;
         } else {
-            _agentPipelineTotal[t.providerAgentId] += aggregatedScore;
-            _agentPipelineCount[t.providerAgentId] += 1;
+            _agentPipelineTotal[t.providerTokenId] += aggregatedScore;
+            _agentPipelineCount[t.providerTokenId] += 1;
         }
 
-        _recordValidationResponse(t.requestHash, t.erc8004AgentId, erc8004Response, justificationURI_, tag);
+        _recordValidationResponse(t.requestHash, t.providerTokenId, erc8004Response, justificationURI_, tag);
 
         if (erc8004Response != RESPONSE_DISPUTED) {
             bool providerValid = (erc8004Response == RESPONSE_VALID);
@@ -483,19 +458,17 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
                 for (uint8 i = 0; i < JUDGE_COUNT; i++) {
                     if (votedValid[i]) validJudges[idx++] = t.judgeWallets[i];
                 }
-                // Provider toujours payé — slash géré par StakingContract si INVALID
                 if (t.mode == 1) { try escrowManager.releaseFundsPipeline(taskId_, validJudges) {} catch {} }
                 else             { try escrowManager.releaseFunds(taskId_, t.providerWallet, validJudges) {} catch {} }
             }
         } else {
-            // DISPUTED uniquement → remboursement client (pas de consensus)
             if (address(escrowManager) != address(0)) { try escrowManager.refundClient(taskId_) {} catch {} }
         }
 
         stakingContract.unlockStake(t.providerWallet);
         for (uint8 i = 0; i < JUDGE_COUNT; i++) {
             if (t.judgeWallets[i] != address(0)) stakingContract.unlockStake(t.judgeWallets[i]);
-            if (bytes(t.judgeIds[i]).length > 0) delete _judgeActiveTask[t.judgeIds[i]];
+            if (t.judgeTokenIds[i] != 0) delete _judgeActiveTask[t.judgeTokenIds[i]];
         }
     }
 
@@ -511,21 +484,21 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         if (!expirable) revert NotExpirable(taskId_);
 
         t.status = TaskStatus.EXPIRED; t.finalResponse = 0; t.finalTag = "EXPIRED";
-        _recordValidationResponse(t.requestHash, t.erc8004AgentId, 0, "", "EXPIRED");
+        _recordValidationResponse(t.requestHash, t.providerTokenId, 0, "", "EXPIRED");
         stakingContract.unlockStake(t.providerWallet);
         if (address(escrowManager) != address(0)) { try escrowManager.refundClient(taskId_) {} catch {} }
 
         for (uint8 i = 0; i < JUDGE_COUNT; i++) {
-            string  storage jid    = t.judgeIds[i];
-            address         jwallet = t.judgeWallets[i];
+            uint256 jTokenId = t.judgeTokenIds[i];
+            address jwallet  = t.judgeWallets[i];
             if (jwallet == address(0)) continue;
-            JudgeCommit storage c = _commits[taskId_][jid];
+            JudgeCommit storage c = _commits[taskId_][jTokenId];
             if (!c.committed || !c.revealed) {
                 uint256 amt = stakingContract.slashJudge(jwallet);
-                emit JudgeSlashed(jid, jwallet, amt, "ABSENT");
+                emit JudgeSlashed(jTokenId, jwallet, amt, "ABSENT");
             }
             stakingContract.unlockStake(jwallet);
-            delete _judgeActiveTask[jid];
+            delete _judgeActiveTask[jTokenId];
         }
         emit TaskExpired(taskId_);
     }
@@ -534,32 +507,32 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
      * @notice Émet ScoreRecorded(mode=1) pour les agents non-lead d'un pipeline.
      */
     function recordPipelineScores(
-        string[] calldata agentIds_,
-        string   calldata taskId_,
-        uint8[]  calldata scores_
+        uint256[] calldata agentTokenIds_,
+        string    calldata taskId_,
+        uint8[]   calldata scores_
     ) external onlyOwner {
-        require(agentIds_.length == scores_.length, "length mismatch");
-        for (uint256 i = 0; i < agentIds_.length; i++) {
-            emit ScoreRecorded(agentIds_[i], taskId_, scores_[i], 1);
+        require(agentTokenIds_.length == scores_.length, "length mismatch");
+        for (uint256 i = 0; i < agentTokenIds_.length; i++) {
+            emit ScoreRecorded(agentTokenIds_[i], taskId_, scores_[i], 1);
         }
     }
 
     // ── Views — ERC-8004 ──────────────────────────────────────────────────────
 
     function getValidationStatus(bytes32 requestHash)
-        external view returns (address validatorAddress, uint256 agentId, uint8 response, bytes32 responseHash, string memory tag, uint256 lastUpdate)
+        external view returns (address validatorAddress, uint256 tokenId, uint8 response, bytes32 responseHash, string memory tag, uint256 lastUpdate)
     {
         ValidationRecord storage rec = _validationRecords[requestHash];
-        return (rec.validatorAddress, rec.agentId, rec.response, rec.responseHash, rec.tag, rec.lastUpdate);
+        return (rec.validatorAddress, rec.tokenId, rec.response, rec.responseHash, rec.tag, rec.lastUpdate);
     }
 
-    function getSummary(uint256 agentId_, address[] calldata validatorAddresses, string calldata tag_)
+    function getSummary(uint256 tokenId_, address[] calldata validatorAddresses, string calldata tag_)
         external view returns (uint64 count, uint8 averageResponse)
     {
-        bytes32[] storage hashes    = _agentValidations[agentId_];
-        bool      filterValidator   = validatorAddresses.length > 0;
-        bool      filterTag         = bytes(tag_).length > 0;
-        uint256   total = 0; uint256 matched = 0;
+        bytes32[] storage hashes  = _agentValidations[tokenId_];
+        bool filterValidator      = validatorAddresses.length > 0;
+        bool filterTag            = bytes(tag_).length > 0;
+        uint256 total = 0; uint256 matched = 0;
 
         for (uint256 i = 0; i < hashes.length; i++) {
             ValidationRecord storage rec = _validationRecords[hashes[i]];
@@ -578,8 +551,8 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         count = uint64(matched); averageResponse = matched > 0 ? uint8(total / matched) : 0;
     }
 
-    function getAgentValidations(uint256 agentId_) external view returns (bytes32[] memory) {
-        return _agentValidations[agentId_];
+    function getAgentValidations(uint256 tokenId_) external view returns (bytes32[] memory) {
+        return _agentValidations[tokenId_];
     }
 
     function getValidatorRequests(address validatorAddress) external view returns (bytes32[] memory) {
@@ -592,11 +565,6 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         return _getTask(taskId_);
     }
 
-    /**
-     * @notice Retourne le responseURI (CID IPFS des justifications juges) d'une tâche.
-     * @dev _validationRecords est private — ce getter permet la lecture via RPC direct
-     *      sans passer par The Graph, avec zéro délai d'indexation.
-     */
     function getResponseURI(string calldata taskId_) external view returns (string memory) {
         return _validationRecords[_getTask(taskId_).requestHash].responseURI;
     }
@@ -605,41 +573,41 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         return _getTask(taskId_).traceHash;
     }
 
-    function getJudgeCommit(string calldata taskId_, string calldata judgeId_) external view returns (JudgeCommit memory) {
-        return _commits[taskId_][judgeId_];
+    function getJudgeCommit(string calldata taskId_, uint256 judgeTokenId_) external view returns (JudgeCommit memory) {
+        return _commits[taskId_][judgeTokenId_];
     }
 
-    function isJudgeBusy(string calldata judgeId_) external view returns (bool) {
-        return bytes(_judgeActiveTask[judgeId_]).length > 0;
+    function isJudgeBusy(uint256 judgeTokenId_) external view returns (bool) {
+        return bytes(_judgeActiveTask[judgeTokenId_]).length > 0;
     }
 
-    function getJudgeActiveTask(string calldata judgeId_) external view returns (string memory) {
-        return _judgeActiveTask[judgeId_];
+    function getJudgeActiveTask(uint256 judgeTokenId_) external view returns (string memory) {
+        return _judgeActiveTask[judgeTokenId_];
     }
 
-    function getAgentScore(string calldata agentId_) external view returns (uint256 averageScore, uint256 totalTasks) {
-        totalTasks        = _agentSoloCount[agentId_] + _agentPipelineCount[agentId_];
-        uint256 total     = _agentSoloTotal[agentId_] + _agentPipelineTotal[agentId_];
-        averageScore      = totalTasks > 0 ? total / totalTasks : 0;
+    function getAgentScore(uint256 tokenId_) external view returns (uint256 averageScore, uint256 totalTasks) {
+        totalTasks    = _agentSoloCount[tokenId_] + _agentPipelineCount[tokenId_];
+        uint256 total = _agentSoloTotal[tokenId_] + _agentPipelineTotal[tokenId_];
+        averageScore  = totalTasks > 0 ? total / totalTasks : 0;
     }
 
-    function getAgentModeScores(string calldata agentId_) external view returns (
+    function getAgentModeScores(uint256 tokenId_) external view returns (
         uint256 soloTotal, uint256 soloCount,
         uint256 pipelineTotal, uint256 pipelineCount
     ) {
-        soloTotal     = _agentSoloTotal[agentId_];
-        soloCount     = _agentSoloCount[agentId_];
-        pipelineTotal = _agentPipelineTotal[agentId_];
-        pipelineCount = _agentPipelineCount[agentId_];
+        soloTotal     = _agentSoloTotal[tokenId_];
+        soloCount     = _agentSoloCount[tokenId_];
+        pipelineTotal = _agentPipelineTotal[tokenId_];
+        pipelineCount = _agentPipelineCount[tokenId_];
     }
 
     function getJudgeAgreementRate(address judgeWallet_) external view returns (uint256 rate, uint256 totalVotes) {
         totalVotes = judgeTotalVotes[judgeWallet_];
-        rate       = totalVotes > 0 ? (judgeAgreements[judgeWallet_] * 100) / totalVotes : 50;
+        rate       = totalVotes > 0 ? (judgeAgreements[judgeWallet_] * 100) / judgeTotalVotes[judgeWallet_] : 50;
     }
 
-    function isEligibleJudgeCandidate(string calldata judgeId_) external view returns (bool) {
-        return _isEligibleJudge(judgeId_);
+    function isEligibleJudgeCandidate(uint256 judgeTokenId_) external view returns (bool) {
+        return _isEligibleJudge(judgeTokenId_);
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
@@ -649,40 +617,39 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         return _tasks[taskId_];
     }
 
-    function _judgeIndexOf(ValidationTask storage t, string memory judgeId_) internal view returns (uint256) {
-        bytes32 h = keccak256(bytes(judgeId_));
+    function _judgeIndexOf(ValidationTask storage t, uint256 judgeTokenId_) internal view returns (uint256) {
         for (uint8 i = 0; i < JUDGE_COUNT; i++) {
-            if (keccak256(bytes(t.judgeIds[i])) == h) return i;
+            if (t.judgeTokenIds[i] == judgeTokenId_) return i;
         }
-        revert NotAJudgeOfTask(judgeId_, t.taskId);
+        revert NotAJudgeOfTask(judgeTokenId_, t.taskId);
     }
 
     function _allCommitted(ValidationTask storage t) internal view returns (bool) {
         for (uint8 i = 0; i < JUDGE_COUNT; i++) {
-            if (!_commits[t.taskId][t.judgeIds[i]].committed) return false;
+            if (!_commits[t.taskId][t.judgeTokenIds[i]].committed) return false;
         }
         return true;
     }
 
     function _allRevealed(ValidationTask storage t) internal view returns (bool) {
         for (uint8 i = 0; i < JUDGE_COUNT; i++) {
-            if (!_commits[t.taskId][t.judgeIds[i]].revealed) return false;
+            if (!_commits[t.taskId][t.judgeTokenIds[i]].revealed) return false;
         }
         return true;
     }
 
-    function _isEligibleJudge(string memory judgeId_) internal view returns (bool) {
-        if (!identityRegistry.agentIdExists(judgeId_)) return false;
-        if (!identityRegistry.isActive(judgeId_))      return false;
-        if (identityRegistry.getAgentType(judgeId_) != AGENT_TYPE_JUDGE) return false;
-        address wallet = identityRegistry.getAgentWallet(judgeId_);
-        if (!stakingContract.isEligibleJudge(wallet)) return false;
-        if (stakingContract.isLocked(wallet))          return false;
-        if (bytes(_judgeActiveTask[judgeId_]).length > 0) return false;
+    function _isEligibleJudge(uint256 tokenId_) internal view returns (bool) {
+        if (!identityRegistry.agentTokenExists(tokenId_))                             return false;
+        if (!identityRegistry.isActiveByTokenId(tokenId_))                            return false;
+        if (identityRegistry.getAgentTypeByTokenId(tokenId_) != AGENT_TYPE_JUDGE)     return false;
+        address wallet = identityRegistry.getAgentWalletByTokenId(tokenId_);
+        if (!stakingContract.isEligibleJudge(wallet))                                 return false;
+        if (stakingContract.isLocked(wallet))                                         return false;
+        if (bytes(_judgeActiveTask[tokenId_]).length > 0)                             return false;
         return true;
     }
 
-    function _recordValidationResponse(bytes32 requestHash_, uint256 erc8004AgentId_, uint8 response_, string memory responseURI_, string memory tag_) internal {
+    function _recordValidationResponse(bytes32 requestHash_, uint256 tokenId_, uint8 response_, string memory responseURI_, string memory tag_) internal {
         bytes32 responseHash = keccak256(abi.encode(requestHash_, response_, tag_));
         ValidationRecord storage rec = _validationRecords[requestHash_];
         rec.response     = response_;
@@ -690,30 +657,30 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         rec.tag          = tag_;
         rec.responseURI  = responseURI_;
         rec.lastUpdate   = block.timestamp;
-        emit ValidationResponse(address(this), erc8004AgentId_, requestHash_, response_, responseURI_, responseHash, tag_);
+        emit ValidationResponse(address(this), tokenId_, requestHash_, response_, responseURI_, responseHash, tag_);
     }
 
     function _applyOutcomes(ValidationTask storage t, bool providerValid, bool[3] memory votedValid, bool[3] memory didReveal) internal {
         if (!providerValid) {
             uint256 slashedAmt = stakingContract.slashProvider(t.providerWallet);
-            emit ProviderSlashed(t.providerAgentId, t.providerWallet, slashedAmt);
+            emit ProviderSlashed(t.providerTokenId, t.providerWallet, slashedAmt);
         }
 
         for (uint8 i = 0; i < JUDGE_COUNT; i++) {
-            string  storage jid    = t.judgeIds[i];
-            address         jwallet = t.judgeWallets[i];
+            uint256 jTokenId = t.judgeTokenIds[i];
+            address jwallet  = t.judgeWallets[i];
             if (jwallet == address(0)) continue;
 
             if (!didReveal[i]) {
                 uint256 amt = stakingContract.slashJudge(jwallet);
-                emit JudgeSlashed(jid, jwallet, amt, "ABSENT");
+                emit JudgeSlashed(jTokenId, jwallet, amt, "ABSENT");
             } else {
                 bool aligned = (providerValid && votedValid[i]) || (!providerValid && !votedValid[i]);
                 if (aligned) {
                     judgeAgreements[jwallet]++;
                 } else {
                     uint256 amt = stakingContract.slashJudge(jwallet);
-                    emit JudgeSlashed(jid, jwallet, amt, "DEVIATED");
+                    emit JudgeSlashed(jTokenId, jwallet, amt, "DEVIATED");
                 }
                 judgeTotalVotes[jwallet]++;
                 uint256 rate = (judgeAgreements[jwallet] * 100) / judgeTotalVotes[jwallet];
