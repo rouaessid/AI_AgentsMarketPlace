@@ -24,6 +24,7 @@ class PipelineTask(Base):
     val_task_id           = Column(String, nullable=True)
     pack_id               = Column(String, nullable=True)
     pack_name             = Column(String, nullable=True)
+    buyer_wallet          = Column(String, nullable=True)
     access_granted_at     = Column(String, nullable=True)
     access_expires_at     = Column(String, nullable=True)
     created_at            = Column(String, nullable=False)

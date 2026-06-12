@@ -39,6 +39,7 @@ class JudgeVerdictOut(BaseModel):
     judge_name:             str
     score:                  int | None = None
     verdict:                str | None = None
+    justification:          str | None = None
     justification_ipfs_cid: str | None = None
 
 

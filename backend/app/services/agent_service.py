@@ -95,6 +95,11 @@ def _refresh_record_telemetry(agent_id: str, updates: dict) -> None:
     _records[rid] = record.model_copy(update={"registration_file": new_reg_file, "updated_at": datetime.now(timezone.utc)})
 
 
+def refresh_reputation_score(agent_id: str, score: float) -> None:
+    """Update the in-memory reputation_score for an agent after an EigenTrust sync."""
+    _refresh_record_telemetry(agent_id, {"reputation_score": round(score, 2)})
+
+
 def _build_reg_file(req: AgentSubmitRequest) -> AgentRegistrationFile:
     return AgentRegistrationFile(
         name=req.name, description=req.description, version=req.version,
@@ -262,11 +267,18 @@ async def restore_from_db() -> None:
             # tasks_performed et last_active viennent de get_agent_score() (The Graph/RPC)
             agent_score  = get_agent_score(agent_id) if token_id else None
             _avg_score   = float(agent_score.get("averageScore", 0)) if agent_score else 0.0
-            _et_score    = get_eigentrust_score(token_id) or 0.0
-            _hist        = get_agent_validation_history(agent_id) if token_id else {}
+            _et_score    = get_eigentrust_score(token_id) or 0.0  # 0-100 range
+            _hist        = get_agent_validation_history(agent_id, token_id=token_id) if token_id else {}
             _n_agents    = len([a for a in _records.values() if a.current_token_id and a.agent_type != AgentType.JUDGE])
-            # N=1 → EigenTrust artefact (always 100) → use avg_score; N>1 → use EigenTrust
-            _rep_score   = _avg_score if (_n_agents <= 1 or not _et_score) else _et_score
+            _base_score  = _avg_score if (_n_agents <= 1 or not _et_score) else _et_score
+            try:
+                from app.services.graph_client import get_aggregated_reputation as _get_rep
+                _raw_rep   = _get_rep(token_id) if token_id else {}
+                _starred   = _raw_rep.get("starred", {})
+                _fb_factor = (_starred.get("average", 100) / 100.0) if _starred else 1.0
+            except Exception:
+                _fb_factor = 1.0
+            _rep_score   = round(_base_score * _fb_factor, 2)
             tel_caps = {
                 "tasks_performed":   agent_score.get("totalTasks", 0) if agent_score else 0,
                 "avg_response_time": tel.get("avg_response_time"),
@@ -678,9 +690,30 @@ class AgentService:
     def update_validation_metrics(self, agent_id: str, *, score: float) -> None:
         """
         Score de validation — ancré on-chain via ScoreRecorded.
-        Aucune écriture en DB nécessaire ici.
+        Rafraîchit monthly_tasks/weekly_success depuis The Graph après un délai
+        pour laisser le subgraph indexer l'événement.
         """
         logger.info("Validation completed for %s: score=%d (on-chain via ScoreRecorded)", agent_id, score)
+        import threading
+        def _refresh():
+            import time
+            time.sleep(15)  # attendre que le subgraph indexe ScoreRecorded
+            try:
+                from app.services.graph_client import get_agent_validation_history
+                rid = _agent_index.get(agent_id)
+                if not rid or rid not in _records:
+                    return
+                token_id = _records[rid].current_token_id
+                hist = get_agent_validation_history(agent_id, token_id=token_id)
+                if any(v > 0 for v in hist.get("monthly_tasks", [])) or any(v > 0 for v in hist.get("weekly_success", [])):
+                    _refresh_record_telemetry(agent_id, {
+                        "monthly_tasks":  hist["monthly_tasks"],
+                        "weekly_success": hist["weekly_success"],
+                    })
+                    logger.info("Historique mis à jour pour %s depuis The Graph", agent_id)
+            except Exception as e:
+                logger.debug("Refresh historique %s échoué: %s", agent_id, e)
+        threading.Thread(target=_refresh, daemon=True).start()
 
     def _persist_record(self, record: AgentRecord) -> None:
         """Persist agent_id in agent_embeddings so the row exists for embedding lookup."""

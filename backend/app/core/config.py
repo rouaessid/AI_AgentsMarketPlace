@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     judge_2_id: str = "judge-beta"
     judge_3_id: str = "judge-gamma"
 
+    hf_token: str = ""
+
     # Platform LLM keys — used by planner_service, matching_service
     groq_api_key:   str = ""
     tavily_api_key: str = ""
@@ -103,7 +105,7 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = ["*"]
 
     # The Graph subgraph endpoint — used instead of blockchain_indexer
-    graph_url: str = "https://api.studio.thegraph.com/query/1753968/agentmarket/v5.1.0"
+    graph_url: str = "https://api.studio.thegraph.com/query/1753968/agentmarket/v2.0.0"
 
     @field_validator("debug", mode="before")
     @classmethod

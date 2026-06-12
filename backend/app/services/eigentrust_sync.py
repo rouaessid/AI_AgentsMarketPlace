@@ -52,6 +52,17 @@ async def compute_and_write_eigentrust(agent_id: str, fresh_score: float) -> Non
         logger.warning("EigenTrust non-bloquant échoué : %s", e)
 
 
+async def refresh_all_eigentrust() -> None:
+    """Post-startup refresh — recomputes EigenTrust for all agents with no overrides."""
+    if not settings.reputation_registry_address or not settings.platform_private_key:
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _compute_blocking, {})
+    except Exception as e:
+        logger.warning("EigenTrust refresh_all échoué : %s", e)
+
+
 async def compute_and_write_eigentrust_pipeline(overrides: dict[str, float]) -> None:
     """Pipeline (mode=1) : déclenché une fois avec tous les agents du pipeline."""
     if not overrides:
@@ -103,7 +114,15 @@ def _compute_blocking(overrides: dict[str, float]) -> None:
         if not score_data or not token_id:
             continue
 
-        final_score = score_data["final_score"]
+        final_score = score_data["global_trust"]  # t[i] only — f[i] applied at read-time in reputation.py
+
+        # Always refresh in-memory cache with the computed score
+        try:
+            from app.services.agent_service import refresh_reputation_score
+            refresh_reputation_score(aid, final_score * 100.0)
+        except Exception:
+            pass
+
         if abs(final_score - _last_scores.get(aid, -1.0)) < SCORE_CHANGE_THRESHOLD:
             continue
 

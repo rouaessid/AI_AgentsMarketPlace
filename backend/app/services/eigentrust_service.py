@@ -69,12 +69,15 @@ def _get_mode_scores(agent_id: str) -> tuple[float, float]:
         )
         token_id = identity.functions.getCurrentTokenId(agent_id).call()
         c        = w3.eth.contract(address=Web3.to_checksum_address(addr), abi=_MODE_SCORES_ABI)
-        solo_total, solo_count, pipe_total, pipe_count = c.functions.getAgentModeScores(token_id).call()
+        solo_total = c.functions._agentSoloTotal(token_id).call()
+        solo_count = c.functions._agentSoloCount(token_id).call()
+        pipe_total = c.functions._agentPipelineTotal(token_id).call()
+        pipe_count = c.functions._agentPipelineCount(token_id).call()
         mean_solo     = (solo_total / solo_count)     if solo_count     else 0.0
         mean_pipeline = (pipe_total / pipe_count)     if pipe_count     else 0.0
         return float(mean_solo), float(mean_pipeline)
     except Exception as exc:
-        logger.warning("getAgentModeScores RPC failed for %s: %s", agent_id, exc)
+        logger.warning("Mode scores RPC failed for %s: %s", agent_id, exc)
         return 0.0, 0.0
 
 
@@ -211,7 +214,7 @@ def compute_eigentrust(
                 uf_sums[i]   += max(0.0, val)
                 uf_counts[i] += 1
 
-    uf_avg = np.where(uf_counts > 0, uf_sums / uf_counts, 0.0)
+    uf_avg = np.where(uf_counts > 0, np.divide(uf_sums, uf_counts, where=uf_counts > 0, out=np.zeros(N)), 0.0)
     uf     = uf_avg / 100.0
     uf     = np.where(uf > 0, uf, 0.5)
 

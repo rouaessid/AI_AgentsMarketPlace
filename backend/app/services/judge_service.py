@@ -896,9 +896,8 @@ def _onchain_conclude_sync(
                            [vote, tc, oq, nf, tu, salt])
             )))
 
-        # Fire-and-forget commits (use tokenIds for contract calls)
+        # Sequential commits — send+wait per TX to avoid Base Sepolia in-flight limit
         _wallet_nonce: dict[str, int] = {}
-        _commit_pending: list[tuple] = []
         for key, tid, agent_id, chash in zip(judge_keys, judge_token_ids, judge_agent_ids, commit_hashes):
             _acct = w3.eth.account.from_key(key)
             _addr = _acct.address
@@ -910,11 +909,8 @@ def _onchain_conclude_sync(
                                            "gas": 1_200_000, "gasPrice": w3.eth.gas_price})
             _sig = w3.eth.account.sign_transaction(_tx, key)
             _txh = w3.eth.send_raw_transaction(_sig.raw_transaction)
-            _commit_pending.append((_txh, _tx))
             logger.info("[val] commitVote submitted: tokenId=%d agent=%s nonce=%d txh=%s",
                         tid, agent_id, _nonce, _txh.hex())
-
-        for _txh, _tx in _commit_pending:
             _rcpt = w3.eth.wait_for_transaction_receipt(_txh, timeout=120)
             if _rcpt["status"] != 1:
                 try:
@@ -923,11 +919,11 @@ def _onchain_conclude_sync(
                 except Exception as _ce:
                     raise RuntimeError(f"commitVote reverted ({_txh.hex()}): {_ce}") from _ce
                 raise RuntimeError(f"commitVote reverted (no reason): {_txh.hex()}")
+            time.sleep(3)  # avoid Base Sepolia in-flight TX limit between same-wallet TXs
         logger.info("[val] All commits confirmed")
 
-        # Fire-and-forget reveals (use tokenIds for contract calls)
+        # Sequential reveals — send+wait per TX
         _wallet_nonce = {}
-        _reveal_pending: list[tuple] = []
         for key, tid, salt, (vote, tc, oq, nf, tu) in zip(judge_keys, judge_token_ids, salts, judge_data):
             _acct = w3.eth.account.from_key(key)
             _addr = _acct.address
@@ -939,10 +935,7 @@ def _onchain_conclude_sync(
                                            "gas": 1_200_000, "gasPrice": w3.eth.gas_price})
             _sig = w3.eth.account.sign_transaction(_tx, key)
             _txh = w3.eth.send_raw_transaction(_sig.raw_transaction)
-            _reveal_pending.append((_txh, _tx))
             logger.info("[val] revealVote submitted: tokenId=%d nonce=%d txh=%s", tid, _nonce, _txh.hex())
-
-        for _txh, _tx in _reveal_pending:
             _rcpt = w3.eth.wait_for_transaction_receipt(_txh, timeout=120)
             if _rcpt["status"] != 1:
                 try:
@@ -951,6 +944,7 @@ def _onchain_conclude_sync(
                 except Exception as _ce:
                     raise RuntimeError(f"revealVote reverted ({_txh.hex()}): {_ce}") from _ce
                 raise RuntimeError(f"revealVote reverted (no reason): {_txh.hex()}")
+            time.sleep(3)  # avoid Base Sepolia in-flight TX limit between same-wallet TXs
         logger.info("[val] All reveals confirmed")
 
         _, finalise_receipt = _send(w3, settings.platform_private_key,

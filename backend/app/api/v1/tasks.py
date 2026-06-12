@@ -594,6 +594,7 @@ async def confirm_pack_access(task_id: str, body: ConfirmAccessRequest) -> JSONR
 
     update_pipeline_task(
         task_id,
+        buyer_wallet=body.buyer_wallet.lower(),
         access_granted_at=now.isoformat(),
         access_expires_at=expires.isoformat(),
         tx_hash=body.tx_hash or "",
@@ -948,7 +949,9 @@ async def get_task_status(task_id: str) -> JSONResponse:
 # ── GET /tasks/ ───────────────────────────────────────────────────────────────
 
 @router.get("/")
-async def list_tasks(limit: int = 20) -> JSONResponse:
-    """List recent tasks. buyer_wallet est on-chain — utiliser verify_access() pour filtrer."""
-    tasks = list_pipeline_tasks(limit=limit)
+async def list_tasks(
+    limit: int = 20,
+    buyer_wallet: str | None = None,
+) -> JSONResponse:
+    tasks = list_pipeline_tasks(limit=limit, buyer_wallet=buyer_wallet)
     return JSONResponse({"tasks": tasks, "count": len(tasks)})

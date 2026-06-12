@@ -56,6 +56,28 @@ async def register_agent(req: AgentSubmitRequest) -> AgentSubmitResponse:
         raise _http(e)
 
 
+@router.post("/{agent_id}/retry-onboarding")
+async def retry_onboarding(agent_id: str) -> JSONResponse:
+    """Re-lance le honeypot pour un juge en validation_failed (ex: Docker était fermé)."""
+    from app.services.agent_service import _records, _agent_index
+    from app.models.agent import AgentType, AgentStatus
+    from app.repo.identity_repo import upsert_agent_identity
+    import asyncio as _aio
+
+    rid = _agent_index.get(agent_id)
+    if not rid or rid not in _records:
+        raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
+    record = _records[rid]
+    if record.agent_type != AgentType.JUDGE:
+        raise HTTPException(400, detail=f"'{agent_id}' n'est pas un juge")
+
+    upsert_agent_identity(agent_id=agent_id, registration_status=AgentStatus.PENDING_VALIDATION.value)
+    _records[rid] = _records[rid].model_copy(update={"status": AgentStatus.PENDING_VALIDATION})
+    from app.services.honeypot_service import run_onboarding
+    _aio.create_task(run_onboarding(agent_id))
+    return JSONResponse({"agent_id": agent_id, "message": "Honeypot re-lancé — vérifier les logs dans ~30s"})
+
+
 @router.post("/{agent_id}/retry-register")
 async def retry_register(agent_id: str) -> JSONResponse:
     """
@@ -741,6 +763,17 @@ async def get_validation(agent_id: str) -> ValidationStatusResponse:
             except Exception:
                 pass
 
+    # Fetch per-judge details from IPFS justification document
+    judges = []
+    if response_uri and response_uri.startswith("ipfs://"):
+        try:
+            cid = response_uri.replace("ipfs://", "")
+            from app.services.ipfs_service import IPFSService
+            doc = await IPFSService().get(cid)
+            judges = doc.get("judges", [])
+        except Exception:
+            pass
+
     return ValidationStatusResponse(
         agent_id=agent_id,
         val_task_id=val_task_id,
@@ -749,7 +782,7 @@ async def get_validation(agent_id: str) -> ValidationStatusResponse:
         aggregated_score=agent_score.get("averageScore") if agent_score else None,
         justification_uri=response_uri,
         started_at=session.get("started_at"),
-        judges=[],
+        judges=judges,
     )
 
 

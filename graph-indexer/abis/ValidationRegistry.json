@@ -817,6 +817,19 @@
         "internalType": "string",
         "name": "taskId_",
         "type": "string"
+      }
+    ],
+    "name": "adminCancelPendingTask",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "taskId_",
+        "type": "string"
       },
       {
         "internalType": "uint256[]",
@@ -904,40 +917,6 @@
         "type": "uint256"
       }
     ],
-    "name": "getAgentModeScores",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "soloTotal",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "soloCount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "pipelineTotal",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "pipelineCount",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "tokenId_",
-        "type": "uint256"
-      }
-    ],
     "name": "getAgentScore",
     "outputs": [
       {
@@ -949,25 +928,6 @@
         "internalType": "uint256",
         "name": "totalTasks",
         "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "tokenId_",
-        "type": "uint256"
-      }
-    ],
-    "name": "getAgentValidations",
-    "outputs": [
-      {
-        "internalType": "bytes32[]",
-        "name": "",
-        "type": "bytes32[]"
       }
     ],
     "stateMutability": "view",
@@ -1104,40 +1064,6 @@
   {
     "inputs": [
       {
-        "internalType": "uint256",
-        "name": "tokenId_",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address[]",
-        "name": "validatorAddresses",
-        "type": "address[]"
-      },
-      {
-        "internalType": "string",
-        "name": "tag_",
-        "type": "string"
-      }
-    ],
-    "name": "getSummary",
-    "outputs": [
-      {
-        "internalType": "uint64",
-        "name": "count",
-        "type": "uint64"
-      },
-      {
-        "internalType": "uint8",
-        "name": "averageResponse",
-        "type": "uint8"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "string",
         "name": "taskId_",
         "type": "string"
@@ -1245,69 +1171,6 @@
         "internalType": "bytes32",
         "name": "",
         "type": "bytes32"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "bytes32",
-        "name": "requestHash",
-        "type": "bytes32"
-      }
-    ],
-    "name": "getValidationStatus",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "validatorAddress",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "tokenId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "response",
-        "type": "uint8"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "responseHash",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "string",
-        "name": "tag",
-        "type": "string"
-      },
-      {
-        "internalType": "uint256",
-        "name": "lastUpdate",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "validatorAddress",
-        "type": "address"
-      }
-    ],
-    "name": "getValidatorRequests",
-    "outputs": [
-      {
-        "internalType": "bytes32[]",
-        "name": "",
-        "type": "bytes32[]"
       }
     ],
     "stateMutability": "view",
@@ -1472,29 +1335,6 @@
       }
     ],
     "name": "recordHoneypotResult",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256[]",
-        "name": "agentTokenIds_",
-        "type": "uint256[]"
-      },
-      {
-        "internalType": "string",
-        "name": "taskId_",
-        "type": "string"
-      },
-      {
-        "internalType": "uint8[]",
-        "name": "scores_",
-        "type": "uint8[]"
-      }
-    ],
-    "name": "recordPipelineScores",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

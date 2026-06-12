@@ -50,8 +50,6 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
 
     // ── State Variables ───────────────────────────────────────────────────────
 
-    string public agentRegistry; // ERC-8004 registry identifier
-
     uint256 private _nextTokenId = 1;
 
     // agentId string → identité complète
@@ -60,10 +58,6 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
     mapping(uint256 => string)                           private _tokenToAgentId;
     // tokenId → version metadata
     mapping(uint256 => AgentVersion)                     private _versions;
-    // agentId → existence flag
-    mapping(string  => bool)                             private _agentIdExists;
-    // tokenId → key → valeur metadata arbitraire
-    mapping(uint256 => mapping(string => bytes))         private _metadata;
 
     // ── Events ────────────────────────────────────────────────────────────────
 
@@ -84,13 +78,6 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         string  version
     );
 
-    event MetadataSet(
-        uint256 indexed tokenId,
-        string  indexed indexedKey,
-        string  metadataKey,
-        bytes   metadataValue
-    );
-
     event AgentStatusChanged(
         string  indexed agentId,
         AgentStatus oldStatus,
@@ -105,7 +92,6 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
     error TokenNotFound(uint256 tokenId);
     error NotAgentOwner(string agentId, address caller);
     error SoulboundTransferForbidden();
-    error ReservedMetadataKey(string key);
     error InvalidSignature();
     error SignatureExpired(uint256 deadline, uint256 blockTimestamp);
     error InvalidWallet();
@@ -114,19 +100,13 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
     // ── Modifiers ─────────────────────────────────────────────────────────────
 
     modifier agentExists(string memory agentId) {
-        if (!_agentIdExists[agentId]) revert AgentIdNotFound(agentId);
+        if (bytes(_agents[agentId].agentId).length == 0) revert AgentIdNotFound(agentId);
         _;
     }
 
     modifier onlyAgentOwner(string memory agentId) {
         if (_agents[agentId].owner != msg.sender)
             revert NotAgentOwner(agentId, msg.sender);
-        _;
-    }
-
-    modifier notReservedKey(string memory key) {
-        if (keccak256(bytes(key)) == keccak256(bytes("agentWallet")))
-            revert ReservedMetadataKey(key);
         _;
     }
 
@@ -150,12 +130,7 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         ERC721("AgentMarket Identity", "AMID")
         Ownable(msg.sender)
         EIP712("AgentMarket", "1")
-    {
-        agentRegistry = string(abi.encodePacked(
-            "eip155:", _uint2str(block.chainid),
-            ":", _addr2str(address(this))
-        ));
-    }
+    {}
 
     // ── External — Registration ───────────────────────────────────────────────
 
@@ -178,7 +153,7 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         validAgentId(agentId_)
         returns (uint256 tokenId)
     {
-        if (_agentIdExists[agentId_]) revert AgentIdAlreadyExists(agentId_);
+        if (bytes(_agents[agentId_].agentId).length > 0) revert AgentIdAlreadyExists(agentId_);
 
         tokenId = _nextTokenId++;
         _safeMint(msg.sender, tokenId);
@@ -207,10 +182,8 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
             pricePerTask:   pricePerTask_
         });
 
-        _agentIdExists[agentId_]  = true;
         _tokenToAgentId[tokenId]  = agentId_;
 
-        emit MetadataSet(tokenId, "agentWallet", "agentWallet", abi.encode(msg.sender));
         emit AgentCreated(agentId_, tokenId, msg.sender, agentType_, agentURI_, version_);
     }
 
@@ -265,20 +238,6 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         emit AgentStatusChanged(agentId_, old, newStatus);
     }
 
-    // ── External — Metadata ───────────────────────────────────────────────────
-
-    function setMetadata(
-        uint256          tokenId,
-        string  calldata key,
-        bytes   calldata value
-    ) external notReservedKey(key) {
-        if (!_exists(tokenId)) revert TokenNotFound(tokenId);
-        string memory aid = _tokenToAgentId[tokenId];
-        if (_agents[aid].owner != msg.sender) revert NotAgentOwner(aid, msg.sender);
-        _metadata[tokenId][key] = value;
-        emit MetadataSet(tokenId, key, key, value);
-    }
-
     /**
      * @notice Change le wallet opérationnel d'un agent (signature EIP-712 requise).
      */
@@ -298,7 +257,6 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         if (ECDSA.recover(digest, signature) != newWallet) revert InvalidSignature();
 
         _agents[agentId_].agentWallet = newWallet;
-        emit MetadataSet(tokenId, "agentWallet", "agentWallet", abi.encode(newWallet));
     }
 
     function setPricePerTask(string calldata agentId_, uint256 newPrice_)
@@ -380,20 +338,13 @@ contract IdentityRegistry is ERC721URIStorage, Ownable, EIP712 {
         return _agents[agentId_].pricePerTask;
     }
 
-    function getMetadata(uint256 tokenId, string memory key)
-        external view returns (bytes memory)
-    {
-        if (!_exists(tokenId)) revert TokenNotFound(tokenId);
-        return _metadata[tokenId][key];
-    }
-
     function isActive(string calldata agentId_) external view returns (bool) {
-        return _agentIdExists[agentId_] &&
+        return bytes(_agents[agentId_].agentId).length > 0 &&
                _agents[agentId_].status == AgentStatus.ACTIVE;
     }
 
     function agentIdExists(string calldata agentId_) external view returns (bool) {
-        return _agentIdExists[agentId_];
+        return bytes(_agents[agentId_].agentId).length > 0;
     }
 
     function totalTokensMinted() external view returns (uint256) {

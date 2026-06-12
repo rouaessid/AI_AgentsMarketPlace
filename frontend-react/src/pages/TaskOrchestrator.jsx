@@ -321,33 +321,6 @@ function PackOverviewTab({ pack, agents, subtasks, apiKeys, setApiKeys, required
         </div>
       </div>
 
-      {/* API Keys (shown before access) */}
-      {!hasAccess && requiredKeys.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card p-4 border-amber-200 bg-amber-50/40"
-        >
-          <div className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-3">
-            API Keys required by agents
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {requiredKeys.map(k => (
-              <div key={k}>
-                <label className="text-xs text-am-muted mb-1 block font-mono">{k}</label>
-                <input
-                  type="password"
-                  value={apiKeys[k] || ''}
-                  onChange={e => setApiKeys(prev => ({ ...prev, [k]: e.target.value }))}
-                  placeholder={`Enter ${k}`}
-                  className="w-full text-xs px-3 py-2 rounded-lg border border-am-border bg-white text-am-text outline-none focus:border-amber-400 font-mono"
-                />
-              </div>
-            ))}
-          </div>
-        </motion.div>
-      )}
-
       {/* CTA */}
       {!hasAccess ? (
         <button
@@ -401,9 +374,14 @@ function AgentFeedbackInline({ agentId }) {
             if (!info.reputation_address || info.call_data === '0x')
               throw new Error('Contrat non configuré')
             const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+            const chainHex = await window.ethereum.request({ method: 'eth_chainId' })
+            if (parseInt(chainHex, 16) !== 84532) {
+              try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x14A34' }] }) }
+              catch { throw new Error('Veuillez passer sur Base Sepolia dans MetaMask') }
+            }
             const txHash = await window.ethereum.request({
               method: 'eth_sendTransaction',
-              params: [{ from: accounts[0], to: info.reputation_address, data: info.call_data }],
+              params: [{ from: accounts[0], to: info.reputation_address, data: info.call_data, gas: info.gas ?? '0x30D40' }],
             })
             await agentApi.notifyFeedback(agentId, { tx_hash: txHash, stars }).catch(() => {})
             setDone(true)
@@ -419,41 +397,121 @@ function AgentFeedbackInline({ agentId }) {
   )
 }
 
-function PackLiveTestTab({ agents, subtasks = [], steps, finalOutput, valTaskId, isExecuting, isValidating, isDone, isFailed, taskReady, onStartExecution, onRunAgain, apiKeys, setApiKeys, requiredKeys, validationResults = {} }) {
+// ── Reusable accordion row ────────────────────────────────────────────────────
+function AccordionRow({ icon, title, right, defaultOpen = false, children, highlight = false }) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="space-y-5">
-      {/* Run button — shown only before execution starts */}
-      {taskReady && !isExecuting && !isDone && !isFailed && (
+    <div className={`rounded-xl border overflow-hidden transition-all ${highlight ? 'border-am-indigo/30' : 'border-am-border'} bg-white`}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${open ? 'bg-am-surface/60' : 'hover:bg-am-surface/40'}`}
+      >
+        {icon}
+        <span className="font-medium text-sm text-am-text flex-1 min-w-0 truncate">{title}</span>
+        {right}
+        <span className={`text-am-muted transition-transform duration-200 shrink-0 ${open ? 'rotate-180' : ''}`}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </span>
+      </button>
+      {open && (
         <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card p-5"
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          exit={{ opacity: 0, height: 0 }}
+          transition={{ duration: 0.18 }}
+          className="border-t border-am-border"
         >
+          <div className="p-4">
+            {children}
+          </div>
+        </motion.div>
+      )}
+    </div>
+  )
+}
+
+// ── Validation accordion for one agent ───────────────────────────────────────
+function ValidationAgentRow({ agentId, result, isValidating }) {
+  const score    = result.aggregated_score ?? null
+  const verdict  = result.consensus_verdict || result.status || '—'
+  const judges   = result.judges || []
+  const isValid  = verdict === 'VALID' || verdict === 'APPROVED'
+  const isPending = isValidating && score === null
+
+  return (
+    <AccordionRow
+      defaultOpen={false}
+      icon={
+        isPending
+          ? <Loader2 size={13} className="animate-spin text-am-indigo shrink-0" />
+          : isValid
+          ? <CheckCircle size={13} className="text-emerald-500 shrink-0" />
+          : <XCircle size={13} className="text-rose-400 shrink-0" />
+      }
+      title={<span className="font-mono text-xs">{agentId}</span>}
+      right={
+        <div className="flex items-center gap-2 shrink-0">
+          {score !== null && (
+            <span className="text-sm font-bold text-am-text tabular-nums">{score}<span className="text-xs font-normal text-am-muted">/100</span></span>
+          )}
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${validationBadgeClass(result)}`}>
+            {isPending ? 'pending…' : verdict}
+          </span>
+        </div>
+      }
+    >
+      {/* Buyer view: score summary per judge — no justification (internal audit) */}
+      {judges.length === 0
+        ? <p className="text-xs text-am-muted italic">No judge data yet.</p>
+        : (
+          <div className="space-y-1.5">
+            {judges.map(j => {
+              const jValid = j.verdict === 'VALID' || j.verdict === 'APPROVED'
+              return (
+                <div key={j.judge_id} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-am-surface border border-am-border">
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${jValid ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                  <span className="text-xs text-am-muted flex-1">Judge {judges.indexOf(j) + 1}</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${jValid ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-600'}`}>
+                    {j.verdict || '—'}
+                  </span>
+                  <span className="text-xs font-bold text-am-indigo tabular-nums">{j.score ?? '—'}<span className="font-normal text-am-muted">/100</span></span>
+                </div>
+              )
+            })}
+          </div>
+        )
+      }
+      {!isValidating && <div className="mt-3"><AgentFeedbackInline agentId={agentId} /></div>}
+    </AccordionRow>
+  )
+}
+
+function PackLiveTestTab({ agents, subtasks = [], steps, finalOutput, valTaskId, isExecuting, isValidating, isDone, isFailed, taskReady, onStartExecution, onRunAgain, apiKeys, setApiKeys, requiredKeys, validationResults = {} }) {
+  const succeededSteps = steps.filter(s => s.status === 'success').length
+  const hasValidation  = isValidating || Object.keys(validationResults).length > 0
+
+  return (
+    <div className="space-y-4">
+
+      {/* ── Run button ── */}
+      {taskReady && !isExecuting && !isDone && !isFailed && (
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card p-5">
           <h3 className="font-semibold text-am-text mb-1 flex items-center gap-2">
             <Play size={15} className="text-am-indigo" /> Live Test
           </h3>
-          <p className="text-sm text-am-text-2 mb-4">
-            Access granted. Start the pipeline to see real-time execution.
-          </p>
-
-          {/* API keys if not yet entered (reminder) */}
+          <p className="text-sm text-am-text-2 mb-4">Access granted. Start the pipeline to see real-time execution.</p>
           {requiredKeys.length > 0 && (
             <div className="space-y-4 mb-6">
               <div className="text-xs font-semibold text-am-muted uppercase tracking-wider">Required Agent API Keys</div>
               {requiredKeys.map(k => {
-                const associatedAgents = agents
-                  .filter(a => (a.env_var_keys || []).includes(k))
-                  .map(a => a.agent_name || a.agent_id)
-
+                const assoc = agents.filter(a => (a.env_var_keys || []).includes(k)).map(a => a.agent_name || a.agent_id)
                 return (
                   <div key={k} className="space-y-1.5">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-mono font-bold text-amber-600 uppercase tracking-wider">{k}</label>
-                      <span className="text-[10px] text-am-muted italic">Needed by: {associatedAgents.join(', ')}</span>
+                      <span className="text-[10px] text-am-muted italic">Needed by: {assoc.join(', ')}</span>
                     </div>
-                    <input
-                      type="password"
-                      value={apiKeys[k] || ''}
+                    <input type="password" value={apiKeys[k] || ''}
                       onChange={e => setApiKeys(prev => ({ ...prev, [k]: e.target.value }))}
                       placeholder={`Enter your ${k}`}
                       className="w-full text-xs px-3 py-2.5 rounded-lg border border-am-border bg-white text-am-text outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400/20 font-mono transition-all shadow-sm"
@@ -463,89 +521,147 @@ function PackLiveTestTab({ agents, subtasks = [], steps, finalOutput, valTaskId,
               })}
             </div>
           )}
-
-          <button
-            onClick={onStartExecution}
-            className="btn-primary w-full py-3 flex items-center justify-center gap-2 text-sm font-semibold"
-          >
+          <button onClick={onStartExecution} className="btn-primary w-full py-3 flex items-center justify-center gap-2 text-sm font-semibold">
             <Zap size={16} /> Start Pipeline
           </button>
         </motion.div>
       )}
 
-      {/* Status indicator */}
+      {/* ── Status bar ── */}
       {(isExecuting || isValidating || isDone || isFailed) && (
-        <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center justify-between gap-3 px-1">
           <div className="flex items-center gap-2 text-sm font-medium">
-            {isExecuting && <><Loader2 size={14} className="animate-spin text-amber-500" /><span className="text-amber-600">Executing pipeline…</span></>}
-            {isValidating && <><Loader2 size={14} className="animate-spin text-am-indigo" /><span className="text-am-indigo">Validating with AI judges…</span></>}
-            {isDone && <><CheckCircle size={14} className="text-am-emerald" /><span className="text-am-emerald">Pipeline completed</span></>}
-            {isFailed && <><XCircle size={14} className="text-am-rose" /><span className="text-am-rose">Pipeline failed</span></>}
+            {isExecuting  && <><Loader2 size={13} className="animate-spin text-amber-500" /><span className="text-amber-600">Executing…</span></>}
+            {isValidating && <><Loader2 size={13} className="animate-spin text-am-indigo" /><span className="text-am-indigo">Validating with AI judges…</span></>}
+            {isDone       && <><CheckCircle size={13} className="text-am-emerald" /><span className="text-am-emerald font-semibold">Completed</span></>}
+            {isFailed     && <><XCircle size={13} className="text-am-rose" /><span className="text-am-rose">Failed</span></>}
           </div>
+          {steps.length > 0 && (
+            <span className="text-xs text-am-muted">{succeededSteps}/{steps.length} agents succeeded</span>
+          )}
           {(isDone || isFailed) && onRunAgain && (
-            <button onClick={onRunAgain}
-              className="flex items-center gap-1.5 text-sm font-medium text-am-indigo hover:text-am-indigo/80 border border-am-indigo/30 hover:border-am-indigo/60 px-3 py-1.5 rounded-lg transition-all">
-              <RotateCcw size={13} /> Run Again
+            <button onClick={onRunAgain} className="flex items-center gap-1.5 text-xs font-medium text-am-indigo border border-am-indigo/30 hover:border-am-indigo/60 px-3 py-1.5 rounded-lg transition-all">
+              <RotateCcw size={12} /> Run Again
             </button>
           )}
         </div>
       )}
 
-      {/* Steps */}
+      {/* ── Agent steps (accordions) ── */}
       {steps.length > 0 && (
-        <div className="space-y-3">
-          <div className="text-xs font-semibold text-am-muted uppercase tracking-wide">
-            Execution Steps · {steps.filter(s => s.status === 'success').length}/{steps.length} succeeded
-          </div>
+        <div className="space-y-2">
           {steps.map((step, i) => {
-            const subtask = subtasks.find(st => st.id === step.subtask_id)
+            const subtask  = subtasks.find(st => st.id === step.subtask_id)
+            const ok       = step.status === 'success'
+            const fail     = isFailedStepStatus(step.status)
+            const running  = !ok && !fail
+            const ds       = domainStyle(subtask?.domain)
+            const hasOut   = ok && step.output && step.output.trim().length > 0
+            const writerOut = parseWriterOutput(step.output)
+
             return (
-              <StepResultCard key={step.subtask_id || i} step={step} isDone={isDone} index={i} subtask={subtask} />
+              <AccordionRow
+                key={step.subtask_id || i}
+                defaultOpen={false}
+                icon={
+                  running ? <Loader2 size={13} className="animate-spin text-am-indigo shrink-0" />
+                  : ok    ? <CheckCircle size={13} className="text-emerald-500 shrink-0" />
+                          : <XCircle size={13} className="text-rose-400 shrink-0" />
+                }
+                title={
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs text-am-muted font-bold shrink-0">#{i + 1}</span>
+                    {subtask?.domain && (
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border shrink-0"
+                        style={{ background: ds.bg, color: ds.color, borderColor: ds.border }}>
+                        {subtask.domain}
+                      </span>
+                    )}
+                    <span className="truncate text-sm font-medium text-am-text">
+                      {step.agent_name || step.agent_id || '?'}
+                    </span>
+                  </span>
+                }
+                right={
+                  step.duration_sec != null && (
+                    <span className="flex items-center gap-1 text-xs text-am-muted font-mono shrink-0">
+                      <Clock size={10} />{step.duration_sec.toFixed(1)}s
+                    </span>
+                  )
+                }
+              >
+                {/* Subtask description */}
+                {subtask?.description && (
+                  <p className="text-xs text-am-muted mb-3 italic">{subtask.description}</p>
+                )}
+
+                {/* Output */}
+                {hasOut && (
+                  <div className="space-y-2">
+                    {writerOut ? <WriterOutputBlock output={writerOut} /> : <SmartOutput raw={step.output} />}
+                  </div>
+                )}
+
+                {/* Error */}
+                {fail && step.error && (
+                  <div className="flex items-start gap-1.5 text-xs text-rose-500 bg-rose-50 rounded-lg px-3 py-2">
+                    <XCircle size={11} className="shrink-0 mt-0.5" />
+                    {step.error}
+                  </div>
+                )}
+
+                {/* Star rating */}
+                {isDone && ok && <StepRating agentId={step.agent_id} />}
+              </AccordionRow>
             )
           })}
         </div>
       )}
 
-      {/* Final output */}
+      {/* ── Final output (accordion) ── */}
       {finalOutput && (
-        <FinalOutputCard output={finalOutput} valTaskId={valTaskId} />
+        <AccordionRow
+          defaultOpen={true}
+          highlight
+          icon={<CheckCircle size={13} className="text-emerald-500 shrink-0" />}
+          title={<span className="font-semibold text-am-text">Final Output</span>}
+          right={
+            valTaskId && (
+              <span className="text-[10px] text-am-muted font-mono bg-am-surface px-2 py-0.5 rounded-full border border-am-border shrink-0">
+                val: {valTaskId.slice(0, 12)}…
+              </span>
+            )
+          }
+        >
+          <FinalOutputBody output={finalOutput} />
+        </AccordionRow>
       )}
 
-      {/* Validation results */}
-      {(isValidating || Object.keys(validationResults).length > 0) && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card p-5 space-y-4">
-          <div className="flex items-center gap-2">
+      {/* ── Validation (accordion per agent) ── */}
+      {hasValidation && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-1">
             {isValidating
-              ? <Loader2 size={14} className="animate-spin text-am-indigo" />
-              : <CheckCircle size={14} className="text-am-emerald" />
+              ? <Loader2 size={12} className="animate-spin text-am-indigo" />
+              : <CheckCircle size={12} className="text-am-emerald" />
             }
-            <span className="font-semibold text-am-text text-sm">
-              {isValidating ? 'AI judges validation progress' : 'Validation Results'}
+            <span className="text-xs font-semibold text-am-muted uppercase tracking-wider">
+              {isValidating ? 'AI Judges — validation in progress' : 'Validation Results'}
             </span>
           </div>
           {Object.entries(validationResults).map(([agentId, result]) => (
-            <div key={agentId} className="space-y-2 border-t border-am-border pt-3 first:border-0 first:pt-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono font-bold text-am-text">{agentId}</span>
-                <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${validationBadgeClass(result)}`}>
-                  {result.consensus_verdict || result.status}
-                </span>
-                <span className="text-xs text-am-muted ml-auto">{result.aggregated_score ?? '—'}/100</span>
-              </div>
-              {(result.judges || []).map(j => (
-                <div key={j.judge_id} className="flex items-center gap-2 pl-3 text-xs text-am-muted">
-                  <span className="font-mono w-24 shrink-0 truncate">{j.judge_id}</span>
-                  <span className={j.verdict === 'VALID' ? 'text-emerald-600 font-medium' : 'text-rose-500 font-medium'}>{j.verdict}</span>
-                  <span className="text-am-muted">{j.score}/100</span>
-                  <span className="flex-1 truncate italic">{j.justification}</span>
-                </div>
-              ))}
-              {!isValidating && <AgentFeedbackInline agentId={agentId} />}
-            </div>
+            <ValidationAgentRow key={agentId} agentId={agentId} result={result} isValidating={isValidating} />
           ))}
-        </motion.div>
+          {isValidating && Object.keys(validationResults).length === 0 && (
+            <div className="flex items-center gap-2 py-4 pl-4 text-sm text-am-muted">
+              <Loader2 size={14} className="animate-spin text-am-indigo" />
+              Waiting for judge responses…
+            </div>
+          )}
+        </div>
       )}
 
+      {/* ── Loading placeholder ── */}
       {isExecuting && steps.length === 0 && (
         <div className="flex flex-col items-center py-12 gap-3">
           <Loader2 size={24} className="animate-spin text-am-indigo" />
@@ -559,7 +675,6 @@ function PackLiveTestTab({ agents, subtasks = [], steps, finalOutput, valTaskId,
           <p className="text-sm">Get access first to start the pipeline.</p>
         </div>
       )}
-
     </div>
   )
 }
@@ -719,58 +834,387 @@ function parseWriterOutput(raw) {
   if (!raw) return null
   try {
     const p = typeof raw === 'string' ? JSON.parse(raw) : raw
-    if (p && typeof p.title === 'string' && typeof p.content === 'string') return p
+    if (!p || typeof p !== 'object') return null
+    // New format: sections is a dict {heading: prose}
+    if (typeof p.title === 'string' && p.sections && typeof p.sections === 'object' && !Array.isArray(p.sections))
+      return { ...p, _format: 'dict' }
+    // Old format: title + content string
+    if (typeof p.title === 'string' && typeof p.content === 'string')
+      return { ...p, _format: 'legacy' }
   } catch { /* ignore */ }
   return null
 }
 
-function WriterOutputBlock({ output }) {
-  const fmtColors = {
-    report:        { bg: '#eef2ff', color: '#6366f1', border: '#c7d2fe' },
-    article:       { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
-    summary:       { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' },
-    documentation: { bg: '#fdf4ff', color: '#9333ea', border: '#e9d5ff' },
+// Remove artifacts injected by the writer agent into the content string:
+// - Leading repeated quoted title: `"Title", "`
+// - Trailing JSON fragments: `.", "Section1", "Section2", 246, "report"`
+function _cleanWriterContent(content, title = '') {
+  if (!content) return ''
+  let c = content.trim()
+
+  // Strip leading: `"<title>", "` or `"<title>", `
+  if (title) {
+    const esc = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    c = c.replace(new RegExp(`^["""]\\s*${esc}\\s*["""][,.]?\\s*["""]?`), '').trim()
   }
-  const fmt = fmtColors[output.format] || fmtColors.report
+
+  // Strip trailing: everything after the last sentence-ending punctuation
+  // if what follows looks like JSON metadata (quotes, commas, numbers)
+  const lastPunct = Math.max(c.lastIndexOf('.'), c.lastIndexOf('!'), c.lastIndexOf('?'))
+  if (lastPunct > 0) {
+    const after = c.slice(lastPunct + 1).trim()
+    if (after.length > 0 && /^[\s"",\d\w]+$/.test(after) && after.includes('"')) {
+      c = c.slice(0, lastPunct + 1).trim()
+    }
+  }
+
+  return c
+}
+
+// Split content into sections using the section names as headers when they
+// appear as a standalone line or immediately precede a newline.
+function _splitBySections(content, sections) {
+  if (!sections || sections.length === 0) return null
+  const escaped = sections.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const pattern = new RegExp(`(${escaped.join('|')})`, 'g')
+  const parts = content.split(pattern).filter(Boolean)
+  if (parts.length <= 1) return null
+
+  const result = []
+  let i = 0
+  // If first part doesn't match a section header, treat as intro
+  if (!sections.includes(parts[0])) {
+    result.push({ heading: null, body: parts[0].trim() })
+    i = 1
+  }
+  while (i < parts.length) {
+    const heading = parts[i]
+    const body    = (parts[i + 1] || '').trim()
+    if (sections.includes(heading) && body) result.push({ heading, body })
+    i += 2
+  }
+  return result.length > 1 ? result : null
+}
+
+function WriterOutputBlock({ output }) {
+  const sectionColor = '#6366f1'
+  const headerBg     = '#eef2ff'
+  const headerBorder = '#c7d2fe'
+
+  // Build sections array from new dict format or legacy content string
+  let sectionEntries = []
+  if (output._format === 'dict' && output.sections) {
+    sectionEntries = Object.entries(output.sections)
+  } else if (output.content) {
+    // Legacy: show as single section
+    const cleaned = _cleanWriterContent(output.content, output.title)
+    sectionEntries = [['', cleaned]]
+  }
+
   return (
     <div className="space-y-3">
-      <div className="rounded-xl p-4" style={{ background: fmt.bg, border: `1px solid ${fmt.border}` }}>
-        <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: fmt.color }}>
-            {output.format || 'content'}
-          </span>
-          {output.word_count && (
-            <span className="text-xs font-mono" style={{ color: fmt.color }}>{output.word_count} words</span>
-          )}
-        </div>
+      {/* Title header */}
+      <div className="rounded-xl px-4 py-3" style={{ background: headerBg, border: `1px solid ${headerBorder}` }}>
+        <span className="text-[10px] font-semibold uppercase tracking-wider block mb-0.5" style={{ color: sectionColor }}>
+          Report
+        </span>
         <h3 className="font-bold text-am-text text-base leading-snug">{output.title}</h3>
       </div>
-      {Array.isArray(output.sections) && output.sections.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-1">
-          {output.sections.map((s, i) => (
-            <span key={i} className="text-xs px-2.5 py-1 rounded-full border border-am-border bg-am-surface text-am-text-2">{s}</span>
-          ))}
-        </div>
-      )}
-      <div className="rounded-xl p-4 bg-white border border-am-border">
-        <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{output.content}</p>
+
+      {/* Sections */}
+      <div className="space-y-4">
+        {sectionEntries.map(([heading, body], i) => (
+          <div key={i}>
+            {heading && (
+              <div className="text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: sectionColor }}>
+                {heading}
+              </div>
+            )}
+            <p className="text-sm text-slate-700 leading-relaxed">{body}</p>
+          </div>
+        ))}
       </div>
     </div>
   )
 }
 
-// ── Final output card ─────────────────────────────────────────────────────────
+// ── Smart output renderer ─────────────────────────────────────────────────────
+
+// snake_case / camelCase → Title Case label
+function _toLabel(key) {
+  return key.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2')
+            .replace(/\b\w/g, c => c.toUpperCase())
+}
+
+// Extract a readable string from a list item (object or primitive)
+// Priority: semantic content keys > longest non-URL string > URL > raw JSON
+const _ITEM_CONTENT_KEYS = ['point', 'text', 'description', 'title', 'insight', 'finding',
+                             'label', 'name', 'content', 'summary', 'value', 'detail']
+function _itemText(item) {
+  if (typeof item === 'string') return item
+  if (typeof item === 'object' && item !== null) {
+    for (const k of _ITEM_CONTENT_KEYS) {
+      if (typeof item[k] === 'string' && item[k].length > 0) return item[k]
+    }
+    const nonUrl = Object.values(item).filter(v => typeof v === 'string' && !v.startsWith('http'))
+    if (nonUrl.length > 0) return nonUrl.sort((a, b) => b.length - a.length)[0]
+    const all = Object.values(item).filter(v => typeof v === 'string')
+    return all.sort((a, b) => b.length - a.length)[0] || JSON.stringify(item)
+  }
+  return String(item)
+}
+
+// Badge colour based on semantic value
+function _badgeClass(v) {
+  const s = String(v).toLowerCase()
+  const POS = new Set(['positive','yes','pass','success','true','good','approved','high','strong'])
+  const NEG = new Set(['negative','no','fail','failure','false','bad','rejected','low','weak'])
+  if (POS.has(s)) return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+  if (NEG.has(s)) return 'bg-red-500/20 text-red-300 border-red-500/40'
+  if (typeof v === 'number') return 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+  return 'bg-slate-700/60 text-slate-300 border-slate-600/40'
+}
+
+// Generic structured renderer — works for any JSON object regardless of field names
+function StructuredJSON({ obj, depth = 0 }) {
+  const [showRaw, setShowRaw] = useState(false)
+
+  const badges = []  // short strings (≤ 60 chars), numbers, booleans
+  const prose  = []  // long strings
+  const lists  = []  // arrays
+  const nested = []  // plain objects
+
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === undefined) continue
+    if (typeof v === 'boolean' || typeof v === 'number') {
+      badges.push([k, v])
+    } else if (typeof v === 'string') {
+      if (v.length <= 60) badges.push([k, v])
+      else prose.push([k, v])
+    } else if (Array.isArray(v) && v.length > 0) {
+      lists.push([k, v])
+    } else if (typeof v === 'object' && !Array.isArray(v)) {
+      nested.push([k, v])
+    }
+  }
+
+  const hasContent = badges.length || prose.length || lists.length || nested.length
+  if (!hasContent) {
+    return (
+      <pre className="text-xs font-mono text-slate-300 bg-slate-950 p-3 rounded-xl overflow-x-auto leading-relaxed">
+        {JSON.stringify(obj, null, 2)}
+      </pre>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+
+      {/* ── Badges / short values ── */}
+      {badges.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {badges.map(([k, v]) => (
+            <span key={k}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${_badgeClass(v)}`}>
+              <span className="opacity-55 text-[10px] uppercase tracking-wide">{_toLabel(k)}</span>
+              <span className="font-semibold">
+                {typeof v === 'boolean' ? (v ? 'Yes' : 'No')
+                 : typeof v === 'number' ? (v > 1 && v <= 100 ? `${v}%` : String(v))
+                 : String(v)}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* ── Prose paragraphs ── */}
+      {prose.map(([k, v]) => (
+        <div key={k}>
+          <div className="text-[11px] font-semibold text-am-indigo uppercase tracking-wider mb-1">
+            {_toLabel(k)}
+          </div>
+          <div className="text-sm text-am-text leading-relaxed whitespace-pre-wrap">{v}</div>
+        </div>
+      ))}
+
+      {/* ── Bullet lists ── */}
+      {lists.map(([k, v]) => (
+        <div key={k}>
+          <div className="text-[11px] font-semibold text-am-indigo uppercase tracking-wider mb-1">
+            {_toLabel(k)}
+          </div>
+          <ul className="space-y-1 pl-1">
+            {v.map((item, i) => (
+              <li key={i} className="flex gap-2 text-sm text-am-text leading-relaxed">
+                <span className="text-am-indigo mt-0.5 shrink-0 select-none">•</span>
+                <span>{_itemText(item)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+
+      {/* ── Nested objects (recursive) ── */}
+      {nested.map(([k, v]) => (
+        <div key={k} className="pl-3 border-l border-slate-700/60">
+          <div className="text-[11px] font-semibold text-am-indigo uppercase tracking-wider mb-2">
+            {_toLabel(k)}
+          </div>
+          <StructuredJSON obj={v} depth={depth + 1} />
+        </div>
+      ))}
+
+      {/* ── Raw JSON toggle (top level only) ── */}
+      {depth === 0 && (
+        <div className="pt-1">
+          <button onClick={() => setShowRaw(s => !s)}
+            className="text-xs text-am-muted hover:text-am-text transition-colors">
+            {showRaw ? 'Hide raw ↑' : '{} raw JSON'}
+          </button>
+          {showRaw && (
+            <pre className="mt-2 text-xs font-mono text-slate-300 bg-slate-950 p-3 rounded-xl overflow-x-auto leading-relaxed">
+              {JSON.stringify(obj, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SmartOutput({ raw, maxChars = 700 }) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (!raw) return null
+
+  // Try to parse JSON
+  let parsed = null
+  try {
+    const s = typeof raw === 'string' ? raw.trim() : null
+    if (s && (s.startsWith('{') || s.startsWith('['))) parsed = JSON.parse(s)
+  } catch { /* not JSON */ }
+
+  // JSON object → generic structured renderer
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return <StructuredJSON obj={parsed} />
+  }
+
+  // JSON array → pretty code block
+  if (parsed && Array.isArray(parsed)) {
+    return (
+      <pre className="text-xs font-mono text-slate-300 bg-slate-950 p-3 rounded-xl overflow-x-auto leading-relaxed">
+        {JSON.stringify(parsed, null, 2)}
+      </pre>
+    )
+  }
+
+  // Plain text with truncation
+  const text   = typeof raw === 'string' ? raw : String(raw)
+  const isLong = text.length > maxChars
+  return (
+    <div>
+      <div className="text-sm text-am-text leading-relaxed whitespace-pre-wrap">
+        {expanded || !isLong ? text : text.slice(0, maxChars) + '…'}
+      </div>
+      {isLong && (
+        <button onClick={() => setExpanded(v => !v)}
+          className="mt-1.5 text-xs text-am-indigo hover:underline">
+          {expanded ? 'Show less ↑' : 'Show more ↓'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ── Star rating extracted as standalone component ─────────────────────────────
+function StepRating({ agentId }) {
+  const [stars,      setStars]      = useState(0)
+  const [hover,      setHover]      = useState(0)
+  const [submitting, setSubmitting] = useState(false)
+  const [rated,      setRated]      = useState(false)
+  const [rateErr,    setRateErr]    = useState('')
+
+  async function submitRating() {
+    if (!stars || submitting || rated) return
+    setSubmitting(true); setRateErr('')
+    try {
+      if (!window.ethereum) throw new Error('MetaMask non détecté')
+      const info = await agentApi.getFeedbackInfo(agentId, stars)
+      if (!info.reputation_address || info.call_data === '0x')
+        throw new Error('ReputationRegistry non configuré')
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      const chainHex = await window.ethereum.request({ method: 'eth_chainId' })
+      if (parseInt(chainHex, 16) !== 84532) {
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x14A34' }] }) }
+        catch { throw new Error('Veuillez passer sur Base Sepolia dans MetaMask') }
+      }
+      const txHash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: accounts[0], to: info.reputation_address, data: info.call_data, gas: info.gas ?? '0x30D40' }],
+      })
+      await agentApi.notifyFeedback(agentId, { tx_hash: txHash, stars }).catch(() => {})
+      setRated(true)
+    } catch (e) {
+      setRateErr(e.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="border-t border-amber-100 pt-2.5 mt-3 flex items-center gap-2 flex-wrap">
+      <span className="text-xs text-am-muted">Was this output useful?</span>
+      {rated ? (
+        <span className="flex items-center gap-1 text-xs text-emerald-600 font-medium ml-auto">
+          <CheckCircle size={11} /> Rated {stars}★
+        </span>
+      ) : (
+        <div className="flex items-center gap-1 ml-auto">
+          {[1,2,3,4,5].map(s => (
+            <button key={s} onClick={() => setStars(s)}
+              onMouseEnter={() => setHover(s)} onMouseLeave={() => setHover(0)}
+              className="text-lg leading-none transition-transform hover:scale-110 select-none">
+              <span style={{ color: s <= (hover || stars) ? '#f59e0b' : '#d1d5db' }}>★</span>
+            </button>
+          ))}
+          <button onClick={submitRating} disabled={!stars || submitting}
+            className="ml-2 text-xs px-3 py-1 rounded-lg bg-am-indigo text-white disabled:opacity-40 hover:bg-indigo-700 transition-colors flex items-center gap-1">
+            {submitting ? <Loader2 size={10} className="animate-spin" /> : 'Submit'}
+          </button>
+        </div>
+      )}
+      {rateErr && <span className="text-xs text-rose-500 w-full">{rateErr}</span>}
+    </div>
+  )
+}
+
+// ── Final output body (content only, used inside AccordionRow) ────────────────
+function FinalOutputBody({ output }) {
+  const [copied, setCopied] = useState(false)
+  const writerData = parseWriterOutput(output)
+  function copy() {
+    navigator.clipboard.writeText(output)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1800)
+  }
+  return (
+    <div className="space-y-3">
+      {writerData ? <WriterOutputBlock output={writerData} /> : <SmartOutput raw={output} maxChars={1200} />}
+      <div className="flex justify-end">
+        <button onClick={copy} className="flex items-center gap-1 text-xs text-am-muted hover:text-am-text transition-colors">
+          {copied ? <><Check size={11} className="text-emerald-500" /> Copied</> : <><Copy size={11} /> Copy</>}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Final output card (kept for legacy use) ───────────────────────────────────
 
 function FinalOutputCard({ output, valTaskId }) {
   const [copied, setCopied] = useState(false)
 
   const writerData = parseWriterOutput(output)
-
-  let displayText = output
-  try {
-    const parsed = JSON.parse(output)
-    displayText = JSON.stringify(parsed, null, 2)
-  } catch { /* not JSON, show as-is */ }
 
   function copyOutput() {
     navigator.clipboard.writeText(output)
@@ -802,13 +1246,10 @@ function FinalOutputCard({ output, valTaskId }) {
 
       {/* Content */}
       <div className="px-4 pt-3 pb-3 bg-white">
-        {writerData ? (
-          <WriterOutputBlock output={writerData} />
-        ) : (
-          <div className="text-sm text-am-text leading-relaxed whitespace-pre-wrap">
-            {displayText}
-          </div>
-        )}
+        {writerData
+          ? <WriterOutputBlock output={writerData} />
+          : <SmartOutput raw={output} maxChars={1200} />
+        }
       </div>
     </motion.div>
   )
@@ -849,9 +1290,14 @@ function StepResultCard({ step, isDone, index, subtask }) {
         throw new Error('ReputationRegistry non configuré')
 
       const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      const chainHex = await window.ethereum.request({ method: 'eth_chainId' })
+      if (parseInt(chainHex, 16) !== 84532) {
+        try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x14A34' }] }) }
+        catch { throw new Error('Veuillez passer sur Base Sepolia dans MetaMask') }
+      }
       const txHash = await window.ethereum.request({
         method: 'eth_sendTransaction',
-        params: [{ from: accounts[0], to: info.reputation_address, data: info.call_data }],
+        params: [{ from: accounts[0], to: info.reputation_address, data: info.call_data, gas: info.gas ?? '0x30D40' }],
       })
 
       // Notifie le backend pour déclencher le recalcul EigenTrust
@@ -904,35 +1350,20 @@ function StepResultCard({ step, isDone, index, subtask }) {
       )}
 
       {/* ── Output ── */}
-      {hasOutput && (() => {
-        const writerData = parseWriterOutput(step.output)
-        if (writerData) {
-          return (
-            <div className="border-t border-am-border pt-3">
-              <WriterOutputBlock output={writerData} />
-              <div className="flex justify-end mt-2">
-                <button onClick={copyOutput}
-                  className="flex items-center gap-1 text-xs text-am-muted hover:text-am-text transition-colors">
-                  {copied ? <><Check size={11} className="text-emerald-500" /> Copié</> : <><Copy size={11} /> Copier</>}
-                </button>
-              </div>
-            </div>
-          )
-        }
-        return (
-          <div className="border-t border-am-border pt-3">
-            <div className="text-xs text-am-text-2 leading-relaxed whitespace-pre-wrap">
-              {step.output}
-            </div>
-            <div className="flex justify-end mt-2">
-              <button onClick={copyOutput}
-                className="flex items-center gap-1 text-xs text-am-muted hover:text-am-text transition-colors">
-                {copied ? <><Check size={11} className="text-emerald-500" /> Copié</> : <><Copy size={11} /> Copier</>}
-              </button>
-            </div>
+      {hasOutput && (
+        <div className="border-t border-am-border pt-3 space-y-2">
+          {parseWriterOutput(step.output)
+            ? <WriterOutputBlock output={parseWriterOutput(step.output)} />
+            : <SmartOutput raw={step.output} />
+          }
+          <div className="flex justify-end">
+            <button onClick={copyOutput}
+              className="flex items-center gap-1 text-xs text-am-muted hover:text-am-text transition-colors">
+              {copied ? <><Check size={11} className="text-emerald-500" /> Copié</> : <><Copy size={11} /> Copier</>}
+            </button>
           </div>
-        )
-      })()}
+        </div>
+      )}
 
       {/* ── Failed reason ── */}
       {fail && step.error && (
@@ -1145,12 +1576,13 @@ export default function TaskOrchestrator() {
   // ── Polling ────────────────────────────────────────────────────────────────
 
   const stopPolling = useCallback(() => {
-    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null }
+    if (pollingRef.current) { clearTimeout(pollingRef.current); pollingRef.current = null }
   }, [])
 
   const startPolling = useCallback((tid) => {
     stopPolling()
-    pollingRef.current = setInterval(async () => {
+    let consecutiveIdle = 0
+    const tick = async () => {
       try {
         const data = await taskApi.getStatus(tid)
         setSteps(data.steps || [])
@@ -1159,16 +1591,25 @@ export default function TaskOrchestrator() {
         setValidationResults(data.validation_results || {})
         if (data.status === 'done') {
           setPageState(PAGE_STATES.done)
-          stopPolling()
+          stopPolling(); return
         } else if (data.status === 'validating') {
           setPageState(PAGE_STATES.validating)
+          consecutiveIdle = 0
         } else if (data.status === 'failed') {
           setPageState(PAGE_STATES.failed)
           setError('Execution failed — check backend logs')
-          stopPolling()
+          stopPolling(); return
+        } else if (data.status === 'running') {
+          consecutiveIdle = 0
+        } else {
+          consecutiveIdle++
         }
       } catch { /* ignore transient */ }
-    }, 2500)
+      // Adaptive: 3s while running/validating, 8s after 5+ idle ticks
+      const delay = consecutiveIdle >= 5 ? 8000 : 3000
+      pollingRef.current = setTimeout(tick, delay)
+    }
+    pollingRef.current = setTimeout(tick, 1000)
   }, [stopPolling])
 
   useEffect(() => () => stopPolling(), [stopPolling])
@@ -1244,23 +1685,38 @@ export default function TaskOrchestrator() {
     }
   }
 
-  // Load active (paid, non-expired) packs for this wallet
-  const loadActivePacks = useCallback(async (wallet) => {
-    if (!wallet) { setActivePacks([]); return }
+  // Load active (paid, non-expired) packs for this wallet — cached 30s in sessionStorage
+  const loadActivePacks = useCallback(async (wallet, force = false) => {
+    setActivePacks([])                          // clear immediately — never show stale wallet data
+    if (!wallet) return
+    const cacheKey = `activePacks_${wallet}`
+    if (!force) {
+      try {
+        const cached = sessionStorage.getItem(cacheKey)
+        if (cached) {
+          const { ts, packs } = JSON.parse(cached)
+          if (Date.now() - ts < 30_000) { setActivePacks(packs); return }
+        }
+      } catch { /* ignore */ }
+    }
     try {
       const data = await taskApi.list(wallet, 50)
       const tasks = data.tasks || data || []
-      // Filter tasks that have valid (non-expired) access
       const now = new Date()
       const active = tasks.filter(t => {
         if (!t.access_expires_at) return false
         try { return new Date(t.access_expires_at) > now } catch { return false }
       })
       setActivePacks(active)
+      try { sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), packs: active })) } catch { /* ignore */ }
     } catch { /* ignore */ }
   }, [])
 
-  useEffect(() => { loadActivePacks(walletAddress) }, [walletAddress, loadActivePacks])
+  useEffect(() => {
+    loadActivePacks(walletAddress)
+    if (!walletAddress) handleReset()          // disconnect → reset any open pack session
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletAddress])
 
   // Navigate to pack detail view (no API call yet)
   // If the wallet already has access to this pack_id → restore session
@@ -1540,73 +1996,76 @@ export default function TaskOrchestrator() {
     <div className="min-h-screen bg-am-bg py-10 px-4 sm:px-6">
       <div className="max-w-4xl mx-auto">
 
-        {/* ── Header ── */}
-        <div className="text-center mb-10">
-          <motion.div
-            initial={{ opacity: 0, y: -16 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-am-indigo/10 border border-am-indigo/20 text-am-indigo text-sm font-medium mb-4"
-          >
-            <Sparkles size={14} />
-            <span>AI Orchestration Studio</span>
-          </motion.div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-am-text mb-3">
-            Build your{' '}
-            <span className="text-gradient-indigo">Agentic Workflow</span>
-          </h1>
-          <p className="text-am-muted max-w-2xl mx-auto text-sm sm:text-base">
-            Describe your task. Our protocol decomposes it into a{' '}
-            <strong>SubTask DAG</strong>, matches the best agents using{' '}
-            <strong>BAAI/bge-m3 + EigenTrust</strong>, and executes it on-chain.
-          </p>
-        </div>
-
-        {/* ── Prompt Box ── */}
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="card p-3 shadow-card-lg border-am-indigo/20 mb-8"
-        >
-          <textarea
-            ref={textareaRef}
-            rows={3}
-            value={prompt}
-            onChange={e => setPrompt(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isPlanning || isExecuting}
-            placeholder="Ex: Research the top 5 AI startups of 2025, summarize their products, and write a detailed investment report…"
-            className="w-full bg-transparent text-sm text-am-text placeholder-am-muted resize-none outline-none px-2 py-1 leading-relaxed"
-          />
-          <div className="flex items-center justify-between mt-2 pt-2 border-t border-am-border">
-            <span className="text-xs text-am-muted">Ctrl+Enter to plan</span>
-            <div className="flex items-center gap-2">
-              {(isPackDetail || isPlanReady) && packs.length > 0 && (
-                <button
-                  onClick={() => { setSelectedPack(null); setHasPackAccess(false); setPageState(PAGE_STATES.pack_selecting) }}
-                  className="btn-ghost text-xs flex items-center gap-1 text-am-indigo"
-                >
-                  <Package size={12} /> View other packs
-                </button>
-              )}
-              {(hasPlan || isPackSelecting || isPackDetail || isFailed) && (
-                <button onClick={handleReset} className="btn-ghost text-xs flex items-center gap-1">
-                  <RotateCcw size={12} /> Reset
-                </button>
-              )}
-              <button
-                onClick={handlePlan}
-                disabled={!prompt.trim() || isPlanning || isExecuting}
-                className="btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+        {/* ── Header + Prompt Box — hidden once a pack session is active ── */}
+        {!showPackDetail && (
+          <>
+            <div className="text-center mb-10">
+              <motion.div
+                initial={{ opacity: 0, y: -16 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-am-indigo/10 border border-am-indigo/20 text-am-indigo text-sm font-medium mb-4"
               >
-                {isPlanning && !selectedPack
-                  ? <><Loader2 size={14} className="animate-spin" /> Building packs…</>
-                  : <><Send size={14} /> Plan Task</>
-                }
-              </button>
+                <Sparkles size={14} />
+                <span>AI Orchestration Studio</span>
+              </motion.div>
+              <h1 className="text-3xl sm:text-4xl font-extrabold text-am-text mb-3">
+                Build your{' '}
+                <span className="text-gradient-indigo">Agentic Workflow</span>
+              </h1>
+              <p className="text-am-muted max-w-2xl mx-auto text-sm sm:text-base">
+                Describe your task. Our protocol decomposes it into a{' '}
+                <strong>SubTask DAG</strong>, matches the best agents using{' '}
+                <strong>BAAI/bge-m3 + EigenTrust</strong>, and executes it on-chain.
+              </p>
             </div>
-          </div>
-        </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="card p-3 shadow-card-lg border-am-indigo/20 mb-8"
+            >
+              <textarea
+                ref={textareaRef}
+                rows={3}
+                value={prompt}
+                onChange={e => setPrompt(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isPlanning || isExecuting}
+                placeholder="Ex: Research the top 5 AI startups of 2025, summarize their products, and write a detailed investment report…"
+                className="w-full bg-transparent text-sm text-am-text placeholder-am-muted resize-none outline-none px-2 py-1 leading-relaxed"
+              />
+              <div className="flex items-center justify-between mt-2 pt-2 border-t border-am-border">
+                <span className="text-xs text-am-muted">Ctrl+Enter to plan</span>
+                <div className="flex items-center gap-2">
+                  {(isPackDetail || isPlanReady) && packs.length > 0 && (
+                    <button
+                      onClick={() => { setSelectedPack(null); setHasPackAccess(false); setPageState(PAGE_STATES.pack_selecting) }}
+                      className="btn-ghost text-xs flex items-center gap-1 text-am-indigo"
+                    >
+                      <Package size={12} /> View other packs
+                    </button>
+                  )}
+                  {(hasPlan || isPackSelecting || isPackDetail || isFailed) && (
+                    <button onClick={handleReset} className="btn-ghost text-xs flex items-center gap-1">
+                      <RotateCcw size={12} /> Reset
+                    </button>
+                  )}
+                  <button
+                    onClick={handlePlan}
+                    disabled={!prompt.trim() || isPlanning || isExecuting}
+                    className="btn-primary text-sm flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isPlanning && !selectedPack
+                      ? <><Loader2 size={14} className="animate-spin" /> Building packs…</>
+                      : <><Send size={14} /> Plan Task</>
+                    }
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
 
         {/* ── Payment Modal ── */}
         <AnimatePresence>
@@ -1726,22 +2185,6 @@ export default function TaskOrchestrator() {
                   />
                 ))}
               </div>
-
-              {isPlanReady && requiredKeys.length > 0 && (
-                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-                  className="card p-4 border-amber-200 bg-amber-50/40">
-                  <div className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-3">API Keys required</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {requiredKeys.map(k => (
-                      <div key={k}>
-                        <label className="text-xs text-am-muted mb-1 block font-mono">{k}</label>
-                        <input type="password" value={apiKeys[k] || ''} onChange={e => setApiKeys(p => ({ ...p, [k]: e.target.value }))}
-                          placeholder={`Enter ${k}`} className="w-full text-xs px-3 py-2 rounded-lg border border-am-border bg-white text-am-text outline-none focus:border-amber-400 font-mono" />
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
 
               {isPlanReady && mode === 'pipeline' && totalEth > 0 && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}

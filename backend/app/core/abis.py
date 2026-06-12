@@ -181,14 +181,27 @@ VALIDATION_REGISTRY_ABI = [
         "stateMutability": "view", "type": "function",
     },
     {
-        "inputs": [{"type": "uint256", "name": "tokenId_"}],
-        "name": "getAgentModeScores",
-        "outputs": [
-            {"type": "uint256", "name": "soloTotal"},
-            {"type": "uint256", "name": "soloCount"},
-            {"type": "uint256", "name": "pipelineTotal"},
-            {"type": "uint256", "name": "pipelineCount"},
-        ],
+        "inputs": [{"type": "uint256"}],
+        "name": "_agentSoloTotal",
+        "outputs": [{"type": "uint256"}],
+        "stateMutability": "view", "type": "function",
+    },
+    {
+        "inputs": [{"type": "uint256"}],
+        "name": "_agentSoloCount",
+        "outputs": [{"type": "uint256"}],
+        "stateMutability": "view", "type": "function",
+    },
+    {
+        "inputs": [{"type": "uint256"}],
+        "name": "_agentPipelineTotal",
+        "outputs": [{"type": "uint256"}],
+        "stateMutability": "view", "type": "function",
+    },
+    {
+        "inputs": [{"type": "uint256"}],
+        "name": "_agentPipelineCount",
+        "outputs": [{"type": "uint256"}],
         "stateMutability": "view", "type": "function",
     },
     {

@@ -323,7 +323,7 @@
     "name": "identityRegistry",
     "outputs": [
       {
-        "internalType": "address",
+        "internalType": "contract IIdentityRegistry",
         "name": "",
         "type": "address"
       }

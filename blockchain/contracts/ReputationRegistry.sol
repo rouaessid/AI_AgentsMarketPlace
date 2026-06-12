@@ -20,13 +20,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 //    getSummary(tokenId, clientAddresses[], tag1, tag2) → moyenne agrégée
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── Interface ────────────────────────────────────────────────────────────────
-
-interface IIdentityRegistry {
-    function agentIdExists(string calldata agentId_) external view returns (bool);
-    function getCurrentTokenId(string calldata agentId_) external view returns (uint256);
-    function ownerOf(uint256 tokenId) external view returns (address);
-}
+import "./interfaces/IIdentityRegistry.sol";
 
 // ════════════════════════════════════════════════════════════════════════════
 

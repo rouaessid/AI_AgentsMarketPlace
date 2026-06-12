@@ -22,30 +22,9 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 //    EscrowManager      → libération/remboursement des paiements
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── Interfaces ────────────────────────────────────────────────────────────────
-
-interface IIdentityRegistry {
-    function isActiveByTokenId(uint256 tokenId)         external view returns (bool);
-    function agentTokenExists(uint256 tokenId)          external view returns (bool);
-    function getAgentWalletByTokenId(uint256 tokenId)   external view returns (address);
-    function getAgentTypeByTokenId(uint256 tokenId)     external view returns (uint8);
-}
-
-interface IStakingContract {
-    function isEligibleProvider(address agent) external view returns (bool);
-    function isEligibleJudge   (address agent) external view returns (bool);
-    function isLocked          (address agent) external view returns (bool);
-    function lockStake  (address agent, uint256 duration) external;
-    function unlockStake(address agent) external;
-    function slashProvider(address agent) external returns (uint256);
-    function slashJudge   (address agent) external returns (uint256);
-}
-
-interface IEscrowManager {
-    function releaseFunds(string calldata taskId, address provider, address[] calldata consensusJudges) external;
-    function releaseFundsPipeline(string calldata taskId, address[] calldata consensusJudges) external;
-    function refundClient(string calldata taskId) external;
-}
+import "./interfaces/IIdentityRegistry.sol";
+import "./interfaces/IStakingContract.sol";
+import "./interfaces/IEscrowManager.sol";
 
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -142,10 +121,7 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     mapping(string  => mapping(uint256 => JudgeCommit)) private _commits;
     mapping(uint256 => string)                          private _judgeActiveTask;
 
-    // ERC-8004 stockage
     mapping(bytes32 => ValidationRecord) private _validationRecords;
-    mapping(uint256 => bytes32[])        private _agentValidations;  // tokenId → requestHashes
-    mapping(address => bytes32[])        private _validatorRequests;
 
     // ── Events ────────────────────────────────────────────────────────────────
 
@@ -277,9 +253,6 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
             responseURI:      "",
             lastUpdate:       block.timestamp
         });
-        _agentValidations[providerTokenId_].push(requestHash_);
-        _validatorRequests[address(this)].push(requestHash_);
-
         emit ValidationRequest(address(this), providerTokenId_, requestURI_, requestHash_);
     }
 
@@ -504,62 +477,21 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Émet ScoreRecorded(mode=1) pour les agents non-lead d'un pipeline.
+     * @notice Admin-only: cancel a task stuck in PENDING (assignJudges never succeeded).
+     * Unlocks the provider stake and refunds escrow. Safe because judges were never assigned.
      */
-    function recordPipelineScores(
-        uint256[] calldata agentTokenIds_,
-        string    calldata taskId_,
-        uint8[]   calldata scores_
-    ) external onlyOwner {
-        require(agentTokenIds_.length == scores_.length, "length mismatch");
-        for (uint256 i = 0; i < agentTokenIds_.length; i++) {
-            emit ScoreRecorded(agentTokenIds_[i], taskId_, scores_[i], 1);
-        }
+    function adminCancelPendingTask(string calldata taskId_) external onlyOwner nonReentrant {
+        ValidationTask storage t = _getTask(taskId_);
+        if (t.status != TaskStatus.PENDING) revert NotExpirable(taskId_);
+
+        t.status = TaskStatus.EXPIRED; t.finalResponse = 0; t.finalTag = "EXPIRED";
+        _recordValidationResponse(t.requestHash, t.providerTokenId, 0, "", "EXPIRED");
+        stakingContract.unlockStake(t.providerWallet);
+        if (address(escrowManager) != address(0)) { try escrowManager.refundClient(taskId_) {} catch {} }
+        emit TaskExpired(taskId_);
     }
 
-    // ── Views — ERC-8004 ──────────────────────────────────────────────────────
-
-    function getValidationStatus(bytes32 requestHash)
-        external view returns (address validatorAddress, uint256 tokenId, uint8 response, bytes32 responseHash, string memory tag, uint256 lastUpdate)
-    {
-        ValidationRecord storage rec = _validationRecords[requestHash];
-        return (rec.validatorAddress, rec.tokenId, rec.response, rec.responseHash, rec.tag, rec.lastUpdate);
-    }
-
-    function getSummary(uint256 tokenId_, address[] calldata validatorAddresses, string calldata tag_)
-        external view returns (uint64 count, uint8 averageResponse)
-    {
-        bytes32[] storage hashes  = _agentValidations[tokenId_];
-        bool filterValidator      = validatorAddresses.length > 0;
-        bool filterTag            = bytes(tag_).length > 0;
-        uint256 total = 0; uint256 matched = 0;
-
-        for (uint256 i = 0; i < hashes.length; i++) {
-            ValidationRecord storage rec = _validationRecords[hashes[i]];
-            if (filterValidator) {
-                bool found = false;
-                for (uint256 j = 0; j < validatorAddresses.length; j++) {
-                    if (rec.validatorAddress == validatorAddresses[j]) { found = true; break; }
-                }
-                if (!found) continue;
-            }
-            if (filterTag && keccak256(bytes(rec.tag)) != keccak256(bytes(tag_))) continue;
-            bytes32 tagHash = keccak256(bytes(rec.tag));
-            if (tagHash == keccak256(bytes("PENDING")) || tagHash == keccak256(bytes("EXPIRED"))) continue;
-            total += rec.response; matched++;
-        }
-        count = uint64(matched); averageResponse = matched > 0 ? uint8(total / matched) : 0;
-    }
-
-    function getAgentValidations(uint256 tokenId_) external view returns (bytes32[] memory) {
-        return _agentValidations[tokenId_];
-    }
-
-    function getValidatorRequests(address validatorAddress) external view returns (bytes32[] memory) {
-        return _validatorRequests[validatorAddress];
-    }
-
-    // ── Views — Internes ──────────────────────────────────────────────────────
+    // ── Views ─────────────────────────────────────────────────────────────────
 
     function getTask(string calldata taskId_) external view returns (ValidationTask memory) {
         return _getTask(taskId_);
@@ -589,16 +521,6 @@ contract ValidationRegistry is Ownable, ReentrancyGuard {
         totalTasks    = _agentSoloCount[tokenId_] + _agentPipelineCount[tokenId_];
         uint256 total = _agentSoloTotal[tokenId_] + _agentPipelineTotal[tokenId_];
         averageScore  = totalTasks > 0 ? total / totalTasks : 0;
-    }
-
-    function getAgentModeScores(uint256 tokenId_) external view returns (
-        uint256 soloTotal, uint256 soloCount,
-        uint256 pipelineTotal, uint256 pipelineCount
-    ) {
-        soloTotal     = _agentSoloTotal[tokenId_];
-        soloCount     = _agentSoloCount[tokenId_];
-        pipelineTotal = _agentPipelineTotal[tokenId_];
-        pipelineCount = _agentPipelineCount[tokenId_];
     }
 
     function getJudgeAgreementRate(address judgeWallet_) external view returns (uint256 rate, uint256 totalVotes) {

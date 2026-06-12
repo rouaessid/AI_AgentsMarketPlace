@@ -2,8 +2,10 @@
 matching_service.py — Matching sémantique SubTask → Agent.
 
 Algorithme :
-  score(agent, subtask) = 0.6 × cosine_sim(embed(subtask.desc), agent.embedding)
-                        + 0.4 × eigentrust[agent.global_trust]
+  score(agent, subtask) = cosine_sim(embed(subtask.desc), agent.embedding)
+
+  La réputation (EigenTrust) est affichée comme info dans les propositions
+  mais n'influence pas le classement — l'acheteur choisit librement.
 
 Embedding : BAAI/bge-m3 via FlagEmbedding (multilingual, 1024 dims).
 Chargement du modèle : lazy, une seule fois au premier appel (singleton).
@@ -31,8 +33,8 @@ from app.schemas.matching import AgentMatch
 
 logger = logging.getLogger(__name__)
 
-COSINE_WEIGHT    = 0.6
-EIGENTRUST_WEIGHT = 0.4
+COSINE_WEIGHT    = 1.0
+EIGENTRUST_WEIGHT = 0.0
 
 # ── Singleton modèle BAAI/bge-m3 (FlagEmbedding) ─────────────────────────────
 # SentenceTransformer appelle os._exit() depuis un thread pool sur Windows —
@@ -49,6 +51,11 @@ def _get_model():
         if _model is not None:
             return _model
         environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+        from app.core.config import get_settings as _gs
+        _hf = _gs().hf_token
+        if _hf:
+            environ["HF_TOKEN"] = _hf
+            environ["HUGGINGFACE_HUB_TOKEN"] = _hf
         from FlagEmbedding import FlagModel
         try:
             import torch

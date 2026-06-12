@@ -18,8 +18,8 @@ import httpx
 
 JUDGE_ID     = os.getenv("JUDGE_ID",     "judge-epsilon")
 JUDGE_NAME   = os.getenv("JUDGE_NAME",   "Judge Epsilon")
-LLM_MODEL    = os.getenv("LLM_MODEL",    "gemini-2.5-flash")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+LLM_MODEL    = os.getenv("LLM_MODEL",    "llama-3.3-70b-versatile")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 IPFS_GATEWAY = os.getenv("IPFS_GATEWAY", "https://ipfs.io/ipfs")
 
 logger = logging.getLogger(__name__)

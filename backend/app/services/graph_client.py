@@ -106,7 +106,7 @@ def get_agent_score(agent_id: str) -> dict | None:
 
 # ── Validation history — The Graph (monthly + weekly breakdown) ───────────────
 
-def get_agent_validation_history(agent_id: str) -> dict:
+def get_agent_validation_history(agent_id: str, token_id: int | None = None) -> dict:
     """
     Query ValidationEvent entities for an agent from The Graph.
     Returns:
@@ -115,10 +115,12 @@ def get_agent_validation_history(agent_id: str) -> dict:
     Returns zeros if The Graph is unavailable.
     """
     from datetime import datetime, timezone
+    if not token_id:
+        return {"monthly_tasks": [0]*12, "weekly_success": [0.0]*7}
     data = _gql("""
-        query GetAgentHistory($agentId: String!) {
+        query GetAgentHistory($tokenId: BigInt!) {
             validationEvents(
-                where: { agentId: $agentId }
+                where: { tokenId: $tokenId }
                 orderBy: blockTimestamp
                 orderDirection: asc
                 first: 1000
@@ -127,7 +129,7 @@ def get_agent_validation_history(agent_id: str) -> dict:
                 blockTimestamp
             }
         }
-    """, {"agentId": agent_id})
+    """, {"tokenId": str(token_id)})
 
     events = data.get("validationEvents") or []
     if not events:

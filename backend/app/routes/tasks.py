@@ -403,7 +403,26 @@ def _pipeline_validation_results(task: dict) -> dict:
             onchain_verdict = None
             response_uri    = None
 
-        agent_score = get_agent_score(aid)
+        agent_score = get_agent_score(aid) if rpc_enabled else None
+
+        judges = []
+        if response_uri and response_uri.startswith("ipfs://"):
+            try:
+                import httpx as _httpx
+                cid = response_uri.replace("ipfs://", "")
+                for _url in [
+                    f"https://gateway.pinata.cloud/ipfs/{cid}",
+                    f"https://ipfs.io/ipfs/{cid}",
+                ]:
+                    try:
+                        _r = _httpx.get(_url, timeout=10)
+                        if _r.status_code == 200:
+                            judges = _r.json().get("judges", [])
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
 
         results[aid] = {
             "val_task_id":       vt_id,
@@ -411,7 +430,7 @@ def _pipeline_validation_results(task: dict) -> dict:
             "aggregated_score":  agent_score.get("averageScore") if agent_score else None,
             "started_at":        session.get("started_at"),
             "justification_uri": response_uri,
-            "judges":            [],
+            "judges":            judges,
         }
     return results
 
@@ -605,6 +624,7 @@ async def confirm_pack_access(task_id: str, body: ConfirmAccessRequest) -> JSONR
 
     update_pipeline_task(
         task_id,
+        buyer_wallet=body.buyer_wallet.lower(),
         access_granted_at=now.isoformat(),
         access_expires_at=expires.isoformat(),
         tx_hash=body.tx_hash or "",
@@ -959,7 +979,9 @@ async def get_task_status(task_id: str) -> JSONResponse:
 # ── GET /tasks/ ───────────────────────────────────────────────────────────────
 
 @router.get("/")
-async def list_tasks(limit: int = 20) -> JSONResponse:
-    """List recent tasks. buyer_wallet est on-chain — utiliser verify_access() pour filtrer."""
-    tasks = list_pipeline_tasks(limit=limit)
+async def list_tasks(
+    limit: int = 20,
+    buyer_wallet: str | None = None,
+) -> JSONResponse:
+    tasks = list_pipeline_tasks(limit=limit, buyer_wallet=buyer_wallet)
     return JSONResponse({"tasks": tasks, "count": len(tasks)})

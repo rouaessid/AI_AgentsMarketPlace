@@ -11,12 +11,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 //  Solo et pipeline supportés.
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── Interface ────────────────────────────────────────────────────────────────
-
-interface IIdentityRegistry {
-    function getPricePerTask(string calldata agentId_) external view returns (uint256);
-    function isActive(string calldata agentId_) external view returns (bool);
-}
+import "./interfaces/IIdentityRegistry.sol";
 
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -25,7 +20,7 @@ contract EscrowManager is Ownable, ReentrancyGuard {
     // ── State Variables ───────────────────────────────────────────────────────
 
     address public validationRegistry;
-    address public identityRegistry;
+    IIdentityRegistry public identityRegistry;
     uint256 public judgeFeePercentage;
 
     // taskId → montant bloqué en ETH
@@ -84,7 +79,7 @@ contract EscrowManager is Ownable, ReentrancyGuard {
 
     function setIdentityRegistry(address _registry) external onlyOwner {
         if (_registry == address(0)) revert ZeroAddress();
-        identityRegistry = _registry;
+        identityRegistry = IIdentityRegistry(_registry);
     }
 
     function setJudgeFeePercentage(uint256 _percentage) external onlyOwner {
@@ -103,8 +98,8 @@ contract EscrowManager is Ownable, ReentrancyGuard {
         string calldata taskId_,
         string calldata agentId_
     ) external payable nonReentrant {
-        if (identityRegistry != address(0)) {
-            IIdentityRegistry ir = IIdentityRegistry(identityRegistry);
+        if (address(identityRegistry) != address(0)) {
+            IIdentityRegistry ir = identityRegistry;
             if (!ir.isActive(agentId_)) revert AgentNotActive(agentId_);
             uint256 required = ir.getPricePerTask(agentId_);
             if (required > 0 && msg.value < required)
@@ -195,8 +190,8 @@ contract EscrowManager is Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < shares_bps_.length; i++) totalShares += shares_bps_[i];
         if (totalShares != 10_000) revert InvalidSharesSum(totalShares, 10_000);
 
-        if (identityRegistry != address(0)) {
-            IIdentityRegistry ir = IIdentityRegistry(identityRegistry);
+        if (address(identityRegistry) != address(0)) {
+            IIdentityRegistry ir = identityRegistry;
             uint256 requiredTotal = 0;
             for (uint256 i = 0; i < agentIds_.length; i++) {
                 if (!ir.isActive(agentIds_[i])) revert AgentNotActive(agentIds_[i]);

@@ -56,6 +56,35 @@ async def register_agent(req: AgentSubmitRequest) -> AgentSubmitResponse:
         raise _http(e)
 
 
+@router.post("/{agent_id}/retry-onboarding")
+async def retry_onboarding(agent_id: str) -> JSONResponse:
+    """
+    Re-lance le honeypot technique pour un juge en validation_failed.
+    Utile quand Docker était fermé lors du premier test.
+    """
+    from app.services.agent_service import _records, _agent_index
+    from app.models.agent import AgentType, AgentStatus
+    from app.repo.identity_repo import upsert_agent_identity
+    import asyncio as _aio
+
+    rid = _agent_index.get(agent_id)
+    if not rid or rid not in _records:
+        raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable")
+    record = _records[rid]
+    if record.agent_type != AgentType.JUDGE:
+        raise HTTPException(400, detail=f"'{agent_id}' n'est pas un juge")
+    if record.status not in (AgentStatus.VALIDATION_FAILED, AgentStatus.ACTIVE, AgentStatus.PENDING_VALIDATION):
+        raise HTTPException(400, detail=f"Statut inattendu: {record.status.value}")
+
+    upsert_agent_identity(agent_id=agent_id, registration_status=AgentStatus.PENDING_VALIDATION.value)
+    _records[rid] = _records[rid].model_copy(update={"status": AgentStatus.PENDING_VALIDATION})
+
+    from app.services.honeypot_service import run_onboarding
+    _aio.create_task(run_onboarding(agent_id))
+
+    return JSONResponse({"agent_id": agent_id, "message": "Honeypot re-lancé — vérifier les logs dans ~30s"})
+
+
 @router.post("/{agent_id}/retry-register")
 async def retry_register(agent_id: str) -> JSONResponse:
     """
@@ -272,9 +301,39 @@ async def list_by_owner(owner_address: str) -> JSONResponse:
 
 @router.get("")
 async def list_all(page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=100)) -> JSONResponse:
+    import asyncio as _aio
     records, total = await agent_svc.list_all(page, size)
-    return JSONResponse({"agents": [r.model_dump(mode="json") for r in records],
-                         "total": total, "page": page, "size": size})
+    agents_out = [r.model_dump(mode="json") for r in records]
+
+    # Compute live reputation scores in parallel for all provider agents
+    async def _live_rep(idx: int, token_id: int | None) -> None:
+        if not token_id:
+            return
+        try:
+            from app.services.graph_client import get_eigentrust_score, get_aggregated_reputation
+            et = await _aio.get_event_loop().run_in_executor(None, get_eigentrust_score, token_id)
+            rep = await _aio.get_event_loop().run_in_executor(None, get_aggregated_reputation, token_id)
+            if et is None:
+                return
+            starred  = rep.get("starred", {})
+            fb_factor = (starred.get("average", 100) / 100.0) if starred else 1.0
+            score = round(et * fb_factor, 2)
+            caps = (agents_out[idx].get("registration_file") or {}).get("capabilities") or {}
+            caps["reputation_score"] = score
+            if agents_out[idx].get("registration_file"):
+                agents_out[idx]["registration_file"]["capabilities"] = caps
+        except Exception:
+            pass
+
+    provider_tasks = [
+        _live_rep(i, a.get("current_token_id"))
+        for i, a in enumerate(agents_out)
+        if a.get("agent_type") != 1
+    ]
+    if provider_tasks:
+        await _aio.gather(*provider_tasks)
+
+    return JSONResponse({"agents": agents_out, "total": total, "page": page, "size": size})
 
 
 @router.get("/{agent_id}/versions")
@@ -840,6 +899,7 @@ async def get_feedback_info(
         "value_on_chain":     score * 20,
         "reputation_address": reputation_address,
         "call_data":          call_data,
+        "gas":                "0x493E0",  # 300 000 — safe upper bound for giveFeedback
     })
 
 

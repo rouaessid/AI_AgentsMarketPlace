@@ -13,6 +13,27 @@
 const { ethers } = require("hardhat");
 const fs   = require("fs");
 const path = require("path");
+const { Client } = require("pg");
+
+// ── DB reset ──────────────────────────────────────────────────────────────────
+
+async function resetDatabase() {
+    const envRaw = fs.readFileSync(path.resolve(__dirname, "../../.env"), "utf8");
+    const match  = envRaw.match(/^DATABASE_URL=(.+)$/m);
+    if (!match) { console.warn("   ⚠  DATABASE_URL not found in .env — skipping DB reset"); return; }
+
+    const dbUrl  = match[1].trim();
+    const dbName = new URL(dbUrl.replace("postgresql://", "http://")).pathname.replace("/", "");
+
+    // Connect to system DB to drop/create the app DB
+    const sysUrl = dbUrl.replace(`/${dbName}`, "/postgres");
+    const client = new Client({ connectionString: sysUrl });
+    await client.connect();
+    await client.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+    await client.query(`CREATE DATABASE "${dbName}"`);
+    await client.end();
+    console.log(`   DB "${dbName}" réinitialisée ✓`);
+}
 
 // ── Paths ──────────────────────────────────────────────────────────────────────
 const ROOT            = path.resolve(__dirname, "../..");
@@ -110,9 +131,13 @@ function copyAbis(contracts) {
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 async function main() {
+    // ── 0. Reset DB ───────────────────────────────────────────────────────────
+    console.log("0/6  Réinitialisation de la base de données...");
+    await resetDatabase();
+
     const [deployer] = await ethers.getSigners();
     const balance    = await ethers.provider.getBalance(deployer.address);
-    console.log("Deployer :", deployer.address);
+    console.log("\nDeployer :", deployer.address);
     console.log("Balance  :", ethers.formatEther(balance), "ETH\n");
 
     if (balance < ethers.parseEther("0.01")) {
@@ -177,6 +202,10 @@ async function main() {
     await tx.wait();
     console.log("   ValidationRegistry.setEscrowManager ✓");
 
+    tx = await staking.setValidationRegistry(validationAddress);
+    await tx.wait();
+    console.log("   StakingContract.setValidationRegistry ✓");
+
     tx = await escrow.setValidationRegistry(validationAddress);
     await tx.wait();
     console.log("   EscrowManager.setValidationRegistry ✓");
@@ -184,6 +213,10 @@ async function main() {
     tx = await escrow.setIdentityRegistry(identityAddress);
     await tx.wait();
     console.log("   EscrowManager.setIdentityRegistry   ✓");
+
+    tx = await reputation.initialize(identityAddress);
+    await tx.wait();
+    console.log("   ReputationRegistry.initialize        ✓");
 
     const addresses = {
         identity:   identityAddress,

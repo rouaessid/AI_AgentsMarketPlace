@@ -212,7 +212,7 @@ class SandboxService:
 
         sc = record.registration_file.sandbox_config if record.registration_file else {}
         cpu     = sc.get("cpu_limit", 1)
-        ram     = sc.get("ram_limit_mb", 512)
+        ram     = max(sc.get("ram_limit_mb", 512), 512)
         timeout = sc.get("timeout_sec", 60)
         schema  = sc.get("manifest_schema", "default_v1")
 

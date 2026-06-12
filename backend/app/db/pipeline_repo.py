@@ -67,13 +67,10 @@ def reset_stale_pipeline_tasks() -> int:
         return count
 
 
-def list_pipeline_tasks(limit: int = 50) -> list[dict]:
-    """Return recent pipeline tasks. buyer_wallet est on-chain — filtrer via verify_access()."""
+def list_pipeline_tasks(limit: int = 50, buyer_wallet: str | None = None) -> list[dict]:
     with get_session() as s:
-        rows = (
-            s.query(PipelineTask)
-            .order_by(PipelineTask.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        q = s.query(PipelineTask).order_by(PipelineTask.created_at.desc())
+        if buyer_wallet:
+            q = q.filter(PipelineTask.buyer_wallet == buyer_wallet.lower())
+        rows = q.limit(limit).all()
         return [{c.name: getattr(r, c.name) for c in PipelineTask.__table__.columns} for r in rows]

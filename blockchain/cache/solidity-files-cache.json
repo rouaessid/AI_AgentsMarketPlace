@@ -155,8 +155,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\IdentityRegistry.sol": {
-      "lastModificationDate": 1780912737804,
-      "contentHash": "50ccef524fca6acde3a4687e29d89d92",
+      "lastModificationDate": 1781181123757,
+      "contentHash": "99804b549aa7cf729de5f06f1c9ee461",
       "sourceName": "contracts/IdentityRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1135,8 +1135,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\ValidationRegistry.sol": {
-      "lastModificationDate": 1780913243667,
-      "contentHash": "94b5077d3b0e904f7a80b19527973c0d",
+      "lastModificationDate": 1781181983795,
+      "contentHash": "aa129ecc8c082d79e1ca5c2309397807",
       "sourceName": "contracts/ValidationRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1165,15 +1165,15 @@
       },
       "imports": [
         "@openzeppelin/contracts/access/Ownable.sol",
-        "@openzeppelin/contracts/utils/ReentrancyGuard.sol"
+        "@openzeppelin/contracts/utils/ReentrancyGuard.sol",
+        "./interfaces/IIdentityRegistry.sol",
+        "./interfaces/IStakingContract.sol",
+        "./interfaces/IEscrowManager.sol"
       ],
       "versionPragmas": [
         "^0.8.25"
       ],
       "artifacts": [
-        "IEscrowManager",
-        "IIdentityRegistry",
-        "IStakingContract",
         "ValidationRegistry"
       ]
     },
@@ -1218,8 +1218,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\EscrowManager.sol": {
-      "lastModificationDate": 1780488886671,
-      "contentHash": "5b48a074943e03c2de9cadd8fffa8439",
+      "lastModificationDate": 1781182072888,
+      "contentHash": "7a12c08dc0c7e8db64557890e76001df",
       "sourceName": "contracts/EscrowManager.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1248,19 +1248,19 @@
       },
       "imports": [
         "@openzeppelin/contracts/access/Ownable.sol",
-        "@openzeppelin/contracts/utils/ReentrancyGuard.sol"
+        "@openzeppelin/contracts/utils/ReentrancyGuard.sol",
+        "./interfaces/IIdentityRegistry.sol"
       ],
       "versionPragmas": [
         "^0.8.25"
       ],
       "artifacts": [
-        "EscrowManager",
-        "IIdentityRegistry"
+        "EscrowManager"
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\ReputationRegistry.sol": {
-      "lastModificationDate": 1780761300575,
-      "contentHash": "f768e4a1b807db9c58ff5f36e2270dd6",
+      "lastModificationDate": 1781182000517,
+      "contentHash": "02eddce77436681772a77f773e3db775",
       "sourceName": "contracts/ReputationRegistry.sol",
       "solcConfig": {
         "version": "0.8.25",
@@ -1288,14 +1288,125 @@
         }
       },
       "imports": [
-        "@openzeppelin/contracts/access/Ownable.sol"
+        "@openzeppelin/contracts/access/Ownable.sol",
+        "./interfaces/IIdentityRegistry.sol"
       ],
       "versionPragmas": [
         "^0.8.25"
       ],
       "artifacts": [
-        "IIdentityRegistry",
         "ReputationRegistry"
+      ]
+    },
+    "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\interfaces\\IIdentityRegistry.sol": {
+      "lastModificationDate": 1781181953748,
+      "contentHash": "26d73388ffea0af563097de72005d47c",
+      "sourceName": "contracts/interfaces/IIdentityRegistry.sol",
+      "solcConfig": {
+        "version": "0.8.25",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "cancun",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.25"
+      ],
+      "artifacts": [
+        "IIdentityRegistry"
+      ]
+    },
+    "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\interfaces\\IStakingContract.sol": {
+      "lastModificationDate": 1781181964607,
+      "contentHash": "e3f41908c9e68af6a35c4161bb0aff4b",
+      "sourceName": "contracts/interfaces/IStakingContract.sol",
+      "solcConfig": {
+        "version": "0.8.25",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "cancun",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.25"
+      ],
+      "artifacts": [
+        "IStakingContract"
+      ]
+    },
+    "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\interfaces\\IEscrowManager.sol": {
+      "lastModificationDate": 1781181973928,
+      "contentHash": "6a45158ca4f35ed3704f2ca8fb89c296",
+      "sourceName": "contracts/interfaces/IEscrowManager.sol",
+      "solcConfig": {
+        "version": "0.8.25",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "viaIR": true,
+          "evmVersion": "cancun",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.25"
+      ],
+      "artifacts": [
+        "IEscrowManager"
       ]
     }
   }

@@ -28,6 +28,8 @@ const INITIAL = {
   evaluation_domains: '',
   evaluation_skills: '',
   validated_task_types: '',
+  special_caps: '',
+  tools_used: '',
 }
 
 const ECONOMICS_BY_TYPE = {
@@ -104,6 +106,8 @@ export default function RegisterAgent() {
         evaluation_domains:   form.evaluation_domains.split(',').map(d => d.trim()).filter(Boolean),
         evaluation_skills:    form.evaluation_skills.split(',').map(s => s.trim()).filter(Boolean),
         validated_task_types: form.validated_task_types.split(',').map(t => t.trim()).filter(Boolean),
+        special_caps:         (form.special_caps || '').split(',').map(c => c.trim()).filter(Boolean),
+        tools_used:           (form.tools_used   || '').split(',').map(t => t.trim()).filter(Boolean),
         services: [{
           name: 'run',
           endpoint: '/run',
@@ -492,13 +496,30 @@ function Step2({ form, setField, errors }) {
               onChange={e => setField('evaluation_skills', e.target.value)}
               placeholder="hallucination-detection, coherence-check, completeness" className="input" />
           </Field>
+          <Field label="Special Capabilities" hint="Comma-separated — advanced evaluation abilities">
+            <input id="f-judge-special-caps" type="text" value={form.special_caps}
+              onChange={e => setField('special_caps', e.target.value)}
+              placeholder="hallucination-detection, trace-analysis, multi-step-reasoning" className="input" />
+          </Field>
+          <Field label="Tools Used" hint="Comma-separated — LLMs or APIs your judge relies on">
+            <input id="f-tools-used" type="text" value={form.tools_used}
+              onChange={e => setField('tools_used', e.target.value)}
+              placeholder="groq, tavily, mistral, gemini" className="input" />
+          </Field>
         </>
       ) : (
-        <Field label="Supported Tasks" hint="Comma-separated — e.g. research, summarization">
-          <input id="f-tasks" type="text" value={form.supported_tasks}
-            onChange={e => setField('supported_tasks', e.target.value)}
-            placeholder="research, summarization, analysis" className="input" />
-        </Field>
+        <>
+          <Field label="Supported Tasks" hint="Comma-separated — e.g. research, summarization">
+            <input id="f-tasks" type="text" value={form.supported_tasks}
+              onChange={e => setField('supported_tasks', e.target.value)}
+              placeholder="research, summarization, analysis" className="input" />
+          </Field>
+          <Field label="Special Capabilities" hint="Comma-separated — specific technical abilities beyond task types">
+            <input id="f-special-caps" type="text" value={form.special_caps}
+              onChange={e => setField('special_caps', e.target.value)}
+              placeholder="web-search, structured-output, multi-query-planning, source-citation" className="input" />
+          </Field>
+        </>
       )}
 
       <Field label="README (Markdown)">

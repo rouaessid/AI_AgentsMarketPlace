@@ -16,7 +16,7 @@ from typing import Any
 
 from groq import Groq
 
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 AGENT_ID  = "writer-01"
 
 _EXTRACT_PROMPT = """\
@@ -33,23 +33,23 @@ If a specific number is absent from the text, write "not available" — never es
 """
 
 _WRITE_PROMPT = """\
-You are a professional writer. Write a concise, polished report using ONLY the facts listed below.
+You are a professional writer. Write a structured, polished report using ONLY the facts listed below.
 
 RULES:
-- Write 180-250 words of natural prose paragraphs
-- Include ONLY numbers/percentages explicitly stated in the facts — never invent statistics
-- If future trends or forecasts are mentioned in the facts, include a short outlook paragraph
-- Match the language of the task (write in French if the task is in French)
+- Write 200-300 words of natural prose, split into 3 clearly labelled sections
+- Include ONLY numbers/percentages explicitly stated in the facts — never invent or estimate
+- Match the language of the task prompt (write in French if the task is in French)
+- Each section must be a real paragraph of at least 2 sentences
 
-FORBIDDEN in the "content" field: { } [ ] JSON keys, escaped quotes, bullet points, markdown.
-The content must be plain readable prose sentences and paragraphs ONLY.
+Output ONLY the following JSON. No markdown fences, no extra keys, no escaped quotes inside "content".
 
-Respond ONLY with this JSON object (no markdown fences):
 {
-  "title": "<concise title>",
-  "content": "<180-250 words of clean prose — sentences and paragraphs only, absolutely no JSON>",
-  "sections": ["Introduction", "Tendances clés", "Perspectives"],
-  "word_count": <integer>,
+  "title": "<concise descriptive title, 5-10 words>",
+  "sections": {
+    "Introduction": "<2-3 sentences setting context>",
+    "Key Findings": "<2-4 sentences on the main facts and data>",
+    "Outlook": "<2-3 sentences on trends and future implications>"
+  },
   "format": "report"
 }
 """
@@ -205,57 +205,76 @@ def _dict_to_readable(d: dict) -> str:
 # ── Output parsing and normalization ─────────────────────────────────────────
 
 def _parse_and_normalize(raw: str) -> dict:
-    if "```" in raw:
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+    # Strip markdown fences
+    raw = re.sub(r'```(?:json)?', '', raw).strip()
+    # Extract outermost JSON object
     if not raw.startswith("{"):
         m = re.search(r'\{[\s\S]*\}', raw)
-        if m:
-            raw = m.group(0)
+        raw = m.group(0) if m else raw
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        data = {"title": "Report", "content": raw, "sections": [], "word_count": len(raw.split()), "format": "report"}
+        # Last resort: wrap raw text as a single section
+        return {
+            "title": "Report",
+            "sections": {"Introduction": raw[:1200]},
+            "format": "report",
+        }
     return _normalize_output(data)
 
 
 def _normalize_output(data: Any) -> dict:
     if not isinstance(data, dict):
-        data = {"title": "Report", "content": str(data), "sections": [], "format": "report"}
+        data = {"title": "Report", "sections": {"Introduction": str(data)}, "format": "report"}
 
-    title    = str(data.get("title") or "Report").strip()
-    content  = data.get("content", "")
-    sections = data.get("sections") if isinstance(data.get("sections"), list) else []
-    fmt      = "report"
+    title = str(data.get("title") or "Report").strip()
+    fmt   = "report"
 
-    # If content is a dict/list (nested JSON slipped through), flatten it
-    if isinstance(content, (dict, list)):
-        content = _flatten_to_prose(content)
+    # New format: sections is a dict {heading: prose}
+    sections_raw = data.get("sections", {})
+
+    if isinstance(sections_raw, dict):
+        # Clean each section value
+        sections = {
+            k: _clean_prose(str(v))
+            for k, v in sections_raw.items()
+            if isinstance(v, str) and v.strip()
+        }
+    elif isinstance(sections_raw, list):
+        # Old list format — convert to dict using fallback keys
+        keys = ["Introduction", "Key Findings", "Outlook"]
+        sections = {}
+        for i, item in enumerate(sections_raw[:3]):
+            k = keys[i] if i < len(keys) else f"Section {i+1}"
+            sections[k] = _clean_prose(str(item))
     else:
-        content = str(content).strip()
-        # If content is an escaped JSON string, parse and flatten
-        decoded = _try_json(content)
-        if decoded is not None:
-            content = _flatten_to_prose(decoded)
+        # content field fallback (old format)
+        content = data.get("content", "")
+        if isinstance(content, (dict, list)):
+            content = _flatten_to_prose(content)
+        else:
+            content = _clean_prose(str(content))
+        sections = {"Introduction": content} if content else {}
 
-    # Strip any remaining JSON artifacts from content
-    content = re.sub(r'"[a-z_]{2,30}"\s*:', ' ', content)    # "key": patterns
-    content = re.sub(r'[{}\[\]]', ' ', content)               # braces/brackets
-    content = re.sub(r'\\[nrt"]', ' ', content)               # escape sequences
-    content = re.sub(r'\s{2,}', ' ', content).strip()         # normalize whitespace
-
+    # Fallback if sections is empty
     if not sections:
-        sections = ["Introduction", "Tendances", "Conclusion"]
+        sections = {"Introduction": _clean_prose(str(data)[:800])}
 
     return {
-        "title":      title,
-        "content":    content,
-        "sections":   [str(s) for s in sections[:8]],
-        "word_count": len(content.split()),
-        "format":     fmt,
+        "title":    title,
+        "sections": sections,
+        "format":   fmt,
     }
+
+
+def _clean_prose(text: str) -> str:
+    """Remove JSON artifacts from a prose string."""
+    # Remove escaped quotes and JSON syntax
+    text = re.sub(r'\\[nrt"\\]', ' ', text)
+    text = re.sub(r'[{}\[\]]', ' ', text)
+    text = re.sub(r'"[a-z_]{2,30}"\s*:', ' ', text)
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text.strip('" \t\n')
 
 
 def _try_json(value: str) -> Any | None:
