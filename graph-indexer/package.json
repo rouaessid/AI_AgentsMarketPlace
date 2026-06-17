@@ -4,7 +4,7 @@
   "scripts": {
     "codegen": "graph codegen",
     "build": "graph build",
-    "deploy": "graph deploy --node https://api.studio.thegraph.com/deploy/ agentmarket",
+    "deploy": "graph deploy --node https://api.studio.thegraph.com/deploy/ agentmarket-v-2",
     "create-local": "graph create --node http://localhost:8020/ agentmarket",
     "remove-local": "graph remove --node http://localhost:8020/ agentmarket",
     "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 agentmarket",

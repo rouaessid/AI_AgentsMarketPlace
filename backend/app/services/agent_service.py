@@ -100,6 +100,7 @@ def refresh_reputation_score(agent_id: str, score: float) -> None:
     _refresh_record_telemetry(agent_id, {"reputation_score": round(score, 2)})
 
 
+
 def _build_reg_file(req: AgentSubmitRequest) -> AgentRegistrationFile:
     return AgentRegistrationFile(
         name=req.name, description=req.description, version=req.version,
@@ -463,8 +464,58 @@ class AgentService:
         )
 
     async def confirm(self, body: AgentOnChainConfirm) -> AgentRecord:
+        # Recovery après redémarrage backend — recharger le manifest depuis Pinata
         if body.registration_id not in _records:
-            raise KeyError(f"Registration introuvable: {body.registration_id}")
+            aid = body.agent_id
+            if not aid:
+                raise KeyError(f"Registration introuvable (backend redémarré ?): {body.registration_id}")
+            from app.services.graph_client import get_agent as _get_graph_agent
+            from app.services.ipfs_service import IPFSService as _IPFS
+            graph_agent = _get_graph_agent(aid)
+            agent_uri   = (graph_agent or {}).get("agentURI") or ""
+            if not agent_uri.startswith("ipfs://"):
+                raise KeyError(
+                    f"Backend redémarré et agentURI absent dans The Graph pour '{aid}'. "
+                    "Re-soumettez le formulaire d'enregistrement."
+                )
+            cid = agent_uri.removeprefix("ipfs://")
+            try:
+                manifest_data = await _IPFS().get(cid)
+                reg_file_obj  = AgentRegistrationFile(**manifest_data)
+            except Exception as _ipfs_err:
+                raise KeyError(f"Manifest Pinata inaccessible pour '{aid}' (CID={cid}): {_ipfs_err}")
+            # Reconstruct minimal record from IPFS manifest + The Graph data
+            at_raw   = (graph_agent or {}).get("agentType", "0")
+            at_int   = int(at_raw) if str(at_raw).isdigit() else 0
+            owner    = (graph_agent or {}).get("owner", "")
+            token_id = int((graph_agent or {}).get("tokenId", 0) or 0)
+            recovered = AgentRecord(
+                id=body.registration_id,
+                agent_id=aid,
+                current_token_id=token_id or None,
+                agent_registry=f"eip155:{settings.chain_id}:{settings.identity_registry_address}",
+                name=reg_file_obj.name,
+                version=reg_file_obj.version,
+                agent_type=AgentType.JUDGE if at_int == 1 else AgentType.PROVIDER,
+                status=AgentStatus.PENDING_SIGNATURE,
+                owner_address=owner,
+                ipfs_cid=cid,
+                agent_uri=agent_uri,
+                docker_image=reg_file_obj.sandbox_config.get("docker_image"),
+                stake_amount=reg_file_obj.stake_amount,
+                price_per_task=reg_file_obj.pricing.get("price_per_task", 0),
+                tx_hash=None,
+                registered_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+                supported_tasks=[],
+                special_caps=[],
+                versions=[],
+                registration_file=reg_file_obj,
+            )
+            _records[body.registration_id] = recovered
+            _agent_index[aid]              = body.registration_id
+            logger.info("Record reconstruit depuis Pinata pour %s (CID=%s)", aid, cid)
+
         record         = _records[body.registration_id]
         agent_registry = f"eip155:{settings.chain_id}:{settings.identity_registry_address}"
 

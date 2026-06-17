@@ -45,6 +45,16 @@ module.exports = {
       chainId:  84532,
     },
   },
+  mocha: {
+    reporter: "mochawesome",
+    reporterOptions: {
+      reportDir:      "test-reports",
+      reportFilename: "rapport-tests",
+      quiet:          true,
+      charts:         true,
+      code:           false,
+    },
+  },
   etherscan: {
     apiKey: {
       mainnet:       process.env.ETHERSCAN_API_KEY   || "",

@@ -9,8 +9,7 @@
 //   ✓ giveFeedback — rejet si valueDecimals > 18
 //   ✓ giveFeedback — rejet si agentId inexistant
 //   ✓ giveFeedback — rejet si registry pas initialisé
-//   ✓ recordReputation — appelé par caller autorisé
-//   ✓ recordReputation — rejet si caller non autorisé
+//   ✓ setEigenTrustScore — caller autorisé / non autorisé
 //   ✓ revokeFeedback
 //   ✓ appendResponse (event uniquement)
 //   ✓ getSummary — filtrage par tag1/tag2
@@ -24,16 +23,12 @@ const { ethers } = require("hardhat");
 const { expect } = require("chai");
 
 // ── Stub IdentityRegistry minimal ─────────────────────────────────────────────
-// On déploie un stub léger pour ne pas dépendre du vrai IdentityRegistry.
-// Le stub expose ownerOf, agentIdExists, getCurrentTokenId.
 
 async function deployStubIdentity(deployer, agents) {
-  // agents = [{ agentId: "researcher", tokenId: 1, owner: address }]
   const Stub = await ethers.getContractFactory("IdentityRegistryStub");
   const stub = await Stub.deploy();
   await stub.waitForDeployment();
   for (const a of agents) {
-    // ordre Stub: (agentId, agentType, wallet, tokenId)
     await stub.registerAgent(a.agentId, 0, a.owner, a.tokenId);
   }
   return stub;
@@ -42,10 +37,9 @@ async function deployStubIdentity(deployer, agents) {
 // ── Fixture ───────────────────────────────────────────────────────────────────
 
 async function deploy(agents = []) {
-  const [owner, user1, user2, validationRegistry, agentOwner] =
+  const [owner, user1, user2, authorizedCaller, agentOwner] =
     await ethers.getSigners();
 
-  // Stub identity
   const identity = await deployStubIdentity(owner, agents.length
     ? agents
     : [
@@ -53,18 +47,14 @@ async function deploy(agents = []) {
         { agentId: "analyst",    tokenId: 2, owner: agentOwner.address },
       ]);
 
-  // Vrai ReputationRegistry
   const RR = await ethers.getContractFactory("ReputationRegistry");
   const rr = await RR.deploy();
   await rr.waitForDeployment();
 
-  // Initialiser
   await rr.initialize(await identity.getAddress());
+  await rr.setAuthorizedCaller(authorizedCaller.address, true);
 
-  // Autoriser validationRegistry comme caller
-  await rr.setAuthorizedCaller(validationRegistry.address, true);
-
-  return { rr, identity, owner, user1, user2, validationRegistry, agentOwner };
+  return { rr, identity, owner, user1, user2, authorizedCaller, agentOwner };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -84,7 +74,6 @@ describe("ReputationRegistry (ERC-8004)", function () {
       const RR = await ethers.getContractFactory("ReputationRegistry");
       const rr = await RR.deploy();
       await rr.waitForDeployment();
-      // Pas d'initialize() → RegistryNotInitialized
       await expect(
         rr.connect(user1).giveFeedback(1, 85n, 0, "starred", "", "", "", ethers.ZeroHash)
       ).to.be.revertedWithCustomError(rr, "RegistryNotInitialized");
@@ -101,9 +90,8 @@ describe("ReputationRegistry (ERC-8004)", function () {
   // ── giveFeedback ─────────────────────────────────────────────────────────
 
   describe("giveFeedback", function () {
-    it("un user peut noter un agent (starred, 1-5 → 20-100)", async function () {
+    it("un user peut noter un agent (starred)", async function () {
       const { rr, user1 } = await deploy();
-      // agentId=1, value=85 (note 85/100), tag1="starred"
       await expect(
         rr.connect(user1).giveFeedback(1, 85n, 0, "starred", "", "", "", ethers.ZeroHash)
       ).to.emit(rr, "NewFeedback").withArgs(
@@ -141,7 +129,6 @@ describe("ReputationRegistry (ERC-8004)", function () {
 
     it("accepte valueDecimals jusqu'à 18", async function () {
       const { rr, user1 } = await deploy();
-      // uptime 99.77% → value=9977, valueDecimals=2
       await expect(
         rr.connect(user1).giveFeedback(1, 9977n, 2, "uptime", "", "", "", ethers.ZeroHash)
       ).to.emit(rr, "NewFeedback");
@@ -149,61 +136,40 @@ describe("ReputationRegistry (ERC-8004)", function () {
 
     it("accepte valeurs négatives (int128)", async function () {
       const { rr, user1 } = await deploy();
-      // score négatif possible (ex: pénalité)
       await expect(
         rr.connect(user1).giveFeedback(1, -10n, 0, "successRate", "INVALID", "", "", ethers.ZeroHash)
       ).to.emit(rr, "NewFeedback");
     });
   });
 
-  // ── recordReputation (adapter ValidationRegistry) ────────────────────────
+  // ── setEigenTrustScore ───────────────────────────────────────────────────
 
-  describe("recordReputation", function () {
-    it("caller autorisé peut appeler recordReputation", async function () {
-      const { rr, validationRegistry } = await deploy();
-      await expect(
-        rr.connect(validationRegistry).recordReputation("researcher", 10n, true, "VALID")
-      ).to.emit(rr, "NewFeedback").withArgs(
-        1n,                          // tokenId de "researcher"
-        validationRegistry.address,
-        1n,
-        10n,                         // +10 → isIncrease=true
-        0,
-        "successRate",
-        "successRate",
-        "VALID",
-        "", "", ethers.ZeroHash
-      );
+  describe("setEigenTrustScore", function () {
+    it("caller autorisé peut écrire un score EigenTrust", async function () {
+      const { rr, authorizedCaller } = await deploy();
+      await rr.connect(authorizedCaller).setEigenTrustScore(1, 87);
+      expect(await rr.eigenTrustScore(1)).to.equal(87n);
     });
 
-    it("recordReputation avec isIncrease=false → value négative", async function () {
-      const { rr, validationRegistry } = await deploy();
-      await rr.connect(validationRegistry).recordReputation("researcher", 15n, false, "INVALID");
-      const [value] = await rr.readFeedback(1, validationRegistry.address, 1);
-      expect(value).to.equal(-15n);
+    it("owner peut aussi écrire un score EigenTrust", async function () {
+      const { rr, owner } = await deploy();
+      await rr.connect(owner).setEigenTrustScore(1, 92);
+      expect(await rr.eigenTrustScore(1)).to.equal(92n);
     });
 
-    it("rejet si caller non autorisé", async function () {
+    it("caller non autorisé est rejeté", async function () {
       const { rr, user1 } = await deploy();
       await expect(
-        rr.connect(user1).recordReputation("researcher", 10n, true, "VALID")
+        rr.connect(user1).setEigenTrustScore(1, 50)
       ).to.be.revertedWithCustomError(rr, "UnauthorizedCaller");
     });
 
-    it("rejet si agentId string inexistant", async function () {
-      const { rr, validationRegistry } = await deploy();
+    it("setAuthorizedCaller false révoque l'accès", async function () {
+      const { rr, owner, authorizedCaller } = await deploy();
+      await rr.connect(owner).setAuthorizedCaller(authorizedCaller.address, false);
       await expect(
-        rr.connect(validationRegistry).recordReputation("inexistant", 10n, true, "VALID")
-      ).to.be.revertedWithCustomError(rr, "AgentIdNotFound");
-    });
-
-    it("tags de ValidationRegistry : ABSENT génère value négative", async function () {
-      const { rr, validationRegistry } = await deploy();
-      await rr.connect(validationRegistry).recordReputation("researcher", 10n, false, "ABSENT");
-      const [value, , tag1, tag2] = await rr.readFeedback(1, validationRegistry.address, 1);
-      expect(value).to.equal(-10n);
-      expect(tag1).to.equal("successRate");
-      expect(tag2).to.equal("ABSENT");
+        rr.connect(authorizedCaller).setEigenTrustScore(1, 50)
+      ).to.be.revertedWithCustomError(rr, "UnauthorizedCaller");
     });
   });
 
@@ -230,7 +196,7 @@ describe("ReputationRegistry (ERC-8004)", function () {
       const { rr, user1 } = await deploy();
       await rr.connect(user1).giveFeedback(1, 80n, 0, "starred", "", "", "", ethers.ZeroHash);
       await rr.connect(user1).giveFeedback(1, 60n, 0, "starred", "", "", "", ethers.ZeroHash);
-      await rr.connect(user1).revokeFeedback(1, 1); // révoque le 80
+      await rr.connect(user1).revokeFeedback(1, 1);
       const [count, avg] = await rr.getSummary(1, [user1.address], "starred", "");
       expect(count).to.equal(1n);
       expect(avg).to.equal(60n);
@@ -269,22 +235,20 @@ describe("ReputationRegistry (ERC-8004)", function () {
     });
 
     it("filtre par tag1", async function () {
-      const { rr, validationRegistry, user1 } = await deploy();
-      await rr.connect(validationRegistry).recordReputation("researcher", 10n, true, "VALID");
+      const { rr, authorizedCaller, user1 } = await deploy();
+      // authorizedCaller note en "uptime"
+      await rr.connect(user1).giveFeedback(1, 95n, 2, "uptime", "", "", "", ethers.ZeroHash);
       await rr.connect(user1).giveFeedback(1, 80n, 0, "starred", "", "", "", ethers.ZeroHash);
-      // Filtre sur successRate uniquement
-      const [count] = await rr.getSummary(
-        1, [validationRegistry.address, user1.address], "successRate", ""
-      );
+      const [count] = await rr.getSummary(1, [user1.address], "uptime", "");
       expect(count).to.equal(1n);
     });
 
     it("filtre par tag1+tag2", async function () {
-      const { rr, validationRegistry } = await deploy();
-      await rr.connect(validationRegistry).recordReputation("researcher", 10n, true,  "VALID");
-      await rr.connect(validationRegistry).recordReputation("researcher", 15n, false, "INVALID");
-      const [countValid]   = await rr.getSummary(1, [validationRegistry.address], "successRate", "VALID");
-      const [countInvalid] = await rr.getSummary(1, [validationRegistry.address], "successRate", "INVALID");
+      const { rr, user1, user2 } = await deploy();
+      await rr.connect(user1).giveFeedback(1, 80n, 0, "successRate", "VALID",   "", "", ethers.ZeroHash);
+      await rr.connect(user2).giveFeedback(1, 20n, 0, "successRate", "INVALID", "", "", ethers.ZeroHash);
+      const [countValid]   = await rr.getSummary(1, [user1.address, user2.address], "successRate", "VALID");
+      const [countInvalid] = await rr.getSummary(1, [user1.address, user2.address], "successRate", "INVALID");
       expect(countValid).to.equal(1n);
       expect(countInvalid).to.equal(1n);
     });
@@ -347,30 +311,27 @@ describe("ReputationRegistry (ERC-8004)", function () {
   // ── Scénario intégration : flux complet marketplace ──────────────────────
 
   describe("Scénario marketplace complet", function () {
-    it("ValidationRegistry note un provider VALID + user donne 5 étoiles → getSummary mixte", async function () {
-      const { rr, validationRegistry, user1 } = await deploy();
+    it("user donne 5 étoiles + EigenTrust mis à jour → getSummary + eigenTrustScore cohérents", async function () {
+      const { rr, owner, authorizedCaller, user1 } = await deploy();
 
-      // ValidationRegistry → VALID (+10 successRate)
-      await rr.connect(validationRegistry).recordReputation("researcher", 10n, true, "VALID");
+      // Plateforme écrit le score EigenTrust après calcul off-chain
+      await rr.connect(authorizedCaller).setEigenTrustScore(1, 88);
+      expect(await rr.eigenTrustScore(1)).to.equal(88n);
 
-      // User → 5 étoiles (5*20=100 starred)
+      // User → 5 étoiles (100 starred)
       await rr.connect(user1).giveFeedback(1, 100n, 0, "starred", "", "", "", ethers.ZeroHash);
 
-      // Résumé successRate (validation seule)
-      const [cntVal, avgVal] = await rr.getSummary(
-        1, [validationRegistry.address], "successRate", ""
-      );
-      expect(cntVal).to.equal(1n);
-      expect(avgVal).to.equal(10n);
-
-      // Résumé starred (user seul)
+      // Résumé starred
       const [cntStar, avgStar] = await rr.getSummary(1, [user1.address], "starred", "");
       expect(cntStar).to.equal(1n);
       expect(avgStar).to.equal(100n);
 
-      // 2 clients enregistrés
+      // Score EigenTrust indépendant du feedback on-chain
+      expect(await rr.eigenTrustScore(1)).to.equal(88n);
+
+      // 1 client enregistré
       const clients = await rr.getClients(1);
-      expect(clients.length).to.equal(2);
+      expect(clients.length).to.equal(1);
     });
   });
 

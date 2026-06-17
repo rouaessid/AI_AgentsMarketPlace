@@ -26,15 +26,21 @@ settings = get_settings()
 _CACHE: dict[str, tuple[float, Any]] = {}
 _TTL = 30.0
 
+_CIRCUIT_OPEN_UNTIL: float = 0.0
+_CIRCUIT_COOLDOWN   = 10.0   # pause 10s après un échec
+
 
 def _gql(query: str, variables: dict | None = None) -> dict[str, Any]:
     """Execute a GraphQL query against The Graph and return data dict (cached 30s)."""
+    global _CIRCUIT_OPEN_UNTIL
     url = settings.graph_url
     if not url:
         logger.warning("graph_url not configured — returning empty result")
         return {}
-    cache_key = query + str(variables)
     now = time.monotonic()
+    if now < _CIRCUIT_OPEN_UNTIL:
+        return {}
+    cache_key = query + str(variables)
     if cache_key in _CACHE:
         ts, cached = _CACHE[cache_key]
         if now - ts < _TTL:
@@ -43,7 +49,7 @@ def _gql(query: str, variables: dict | None = None) -> dict[str, Any]:
     if variables:
         payload["variables"] = variables
     try:
-        r = httpx.post(url, json=payload, timeout=4)
+        r = httpx.post(url, json=payload, timeout=httpx.Timeout(connect=20, read=20, write=10, pool=5))
         r.raise_for_status()
         body = r.json()
         if "errors" in body:
@@ -53,7 +59,8 @@ def _gql(query: str, variables: dict | None = None) -> dict[str, Any]:
         _CACHE[cache_key] = (now, data)
         return data
     except Exception as exc:
-        logger.warning("The Graph query failed: %s", exc)
+        _CIRCUIT_OPEN_UNTIL = now + _CIRCUIT_COOLDOWN
+        logger.warning("The Graph query failed: %s — pause %ds", exc, int(_CIRCUIT_COOLDOWN))
         return {}
 
 

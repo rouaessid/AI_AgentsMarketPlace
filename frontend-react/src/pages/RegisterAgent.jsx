@@ -152,7 +152,19 @@ export default function RegisterAgent() {
       })
 
       // Step 3 — Wait for on-chain confirmation before notifying backend
-      await waitForTxReceipt(txHash)
+      const receipt = await waitForTxReceipt(txHash)
+
+      // Parse tokenId from AgentCreated event logs (topics[2] = indexed uint256 tokenId)
+      let tokenId = null
+      for (const log of (receipt?.logs || [])) {
+        if (
+          log.address?.toLowerCase() === res.unsigned_tx.contract_address?.toLowerCase() &&
+          log.topics?.length >= 3
+        ) {
+          tokenId = parseInt(log.topics[2], 16)
+          break
+        }
+      }
 
       // Step 3b — Stake AVANT le confirm (requis avant honeypot pour les juges)
       let stakeTxHash = null
@@ -173,7 +185,12 @@ export default function RegisterAgent() {
       }
 
       // Step 4 — Notify backend of confirmed tx (honeypot onboarding ~25s for judges)
-      await agentApi.confirm({ registration_id: res.registration_id, tx_hash: txHash })
+      await agentApi.confirm({
+        registration_id: res.registration_id,
+        tx_hash: txHash,
+        agent_id: res.agent_id,
+        token_id: tokenId,
+      })
 
       // Redirect immediately — SellerDashboard polls status in background
       setResponse({ ...res, tx_hash: txHash, stake_tx_hash: stakeTxHash })

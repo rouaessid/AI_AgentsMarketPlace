@@ -19,7 +19,8 @@ contract IdentityRegistryStub {
     }
 
     mapping(string  => Agent)   public agents;
-    mapping(uint256 => address) private _tokenOwner; // tokenId → owner (pour ownerOf)
+    mapping(uint256 => address) private _tokenOwner;   // tokenId → owner (pour ownerOf)
+    mapping(uint256 => string)  private _tokenToAgentId; // tokenId → agentId
 
     function registerAgent(
         string calldata agentId,
@@ -34,7 +35,8 @@ contract IdentityRegistryStub {
             wallet: wallet_,
             tokenId: tokenId_
         });
-        _tokenOwner[tokenId_] = wallet_;
+        _tokenOwner[tokenId_]    = wallet_;
+        _tokenToAgentId[tokenId_] = agentId;
     }
 
     /// @notice ERC-721 ownerOf — nécessaire pour ReputationRegistry.giveFeedback
@@ -47,6 +49,8 @@ contract IdentityRegistryStub {
     function setActive(string calldata agentId, bool status) external {
         agents[agentId].isActive = status;
     }
+
+    // ── Par agentId string ────────────────────────────────────────────────────
 
     function isActive(string calldata agentId) external view returns (bool) {
         return agents[agentId].isActive;
@@ -66,6 +70,28 @@ contract IdentityRegistryStub {
 
     function getCurrentTokenId(string calldata agentId) external view returns (uint256) {
         return agents[agentId].tokenId;
+    }
+
+    function getPricePerTask(string calldata /*agentId*/) external pure returns (uint256) {
+        return 0;
+    }
+
+    // ── Par tokenId (interface utilisée par ValidationRegistry) ──────────────
+
+    function isActiveByTokenId(uint256 tokenId) external view returns (bool) {
+        return agents[_tokenToAgentId[tokenId]].isActive;
+    }
+
+    function agentTokenExists(uint256 tokenId) external view returns (bool) {
+        return agents[_tokenToAgentId[tokenId]].exists;
+    }
+
+    function getAgentWalletByTokenId(uint256 tokenId) external view returns (address) {
+        return agents[_tokenToAgentId[tokenId]].wallet;
+    }
+
+    function getAgentTypeByTokenId(uint256 tokenId) external view returns (uint8) {
+        return agents[_tokenToAgentId[tokenId]].agentType;
     }
 }
 
@@ -154,6 +180,11 @@ contract EscrowManagerStub {
     string public lastTaskId;
 
     function releaseFunds(string calldata taskId, address /*provider*/, address[] calldata /*judges*/) external {
+        releaseCount++;
+        lastTaskId = taskId;
+    }
+
+    function releaseFundsPipeline(string calldata taskId, address[] calldata /*judges*/) external {
         releaseCount++;
         lastTaskId = taskId;
     }

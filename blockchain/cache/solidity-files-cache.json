@@ -1178,8 +1178,8 @@
       ]
     },
     "C:\\Users\\Roua\\Desktop\\AI_AgentsMarketPlace\\blockchain\\contracts\\Stubs.sol": {
-      "lastModificationDate": 1776681800525,
-      "contentHash": "436d9b03f50f2902e74728a5a5f1acc9",
+      "lastModificationDate": 1781264793547,
+      "contentHash": "15826a414921db3f8ee0343225ec39c1",
       "sourceName": "contracts/Stubs.sol",
       "solcConfig": {
         "version": "0.8.25",

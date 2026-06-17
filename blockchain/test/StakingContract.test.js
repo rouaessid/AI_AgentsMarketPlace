@@ -32,13 +32,13 @@ describe("StakingContract", function () {
       expect(await staking.isEligibleProvider(provider.address)).to.be.true;
     });
 
-    it("isEligibleProvider false si stake < 0.1 ETH", async () => {
-      await staking.connect(provider).stake({ value: ethers.parseEther("0.05") });
+    it("isEligibleProvider false si stake < 0.001 ETH", async () => {
+      await staking.connect(provider).stake({ value: ethers.parseEther("0.0005") });
       expect(await staking.isEligibleProvider(provider.address)).to.be.false;
     });
 
-    it("isEligibleJudge true si stake >= 0.05 ETH", async () => {
-      await staking.connect(judge).stake({ value: ethers.parseEther("0.05") });
+    it("isEligibleJudge true si stake >= 0.0005 ETH", async () => {
+      await staking.connect(judge).stake({ value: ethers.parseEther("0.0005") });
       expect(await staking.isEligibleJudge(judge.address)).to.be.true;
     });
   });

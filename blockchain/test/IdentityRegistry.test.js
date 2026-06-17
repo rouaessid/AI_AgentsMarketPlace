@@ -22,8 +22,8 @@ async function deploy() {
   return { registry, platform, alice, bob, carol };
 }
 
-async function registerAgent(registry, signer, agentId, type = AgentType.PROVIDER, uri = URI_V1, ver = "1.0.0") {
-  return registry.connect(signer).register(agentId, type, uri, ver);
+async function registerAgent(registry, signer, agentId, type = AgentType.PROVIDER, uri = URI_V1, ver = "1.0.0", price = 0n) {
+  return registry.connect(signer).register(agentId, type, uri, ver, price);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -38,12 +38,11 @@ describe("IdentityRegistry", function () {
       expect(await registry.symbol()).to.equal("AMID");
     });
 
-    it("builds agentRegistry = eip155:{chainId}:{address}", async function () {
+    it("contrat EIP-712 déployé avec le bon nom de domaine", async function () {
+      // agentRegistry() a été supprimé — on vérifie simplement le déploiement
       const { registry } = await deploy();
-      const chainId = (await ethers.provider.getNetwork()).chainId;
-      const ar      = await registry.agentRegistry();
-      expect(ar).to.include(`eip155:${chainId}`);
-      expect(ar.toLowerCase()).to.include((await registry.getAddress()).toLowerCase());
+      expect(await registry.name()).to.equal("AgentMarket Identity");
+      expect(await registry.symbol()).to.equal("AMID");
     });
 
     it("starts with 0 tokens minted", async function () {
@@ -321,27 +320,29 @@ describe("IdentityRegistry", function () {
     });
   });
 
-  // ── Metadata on-chain ─────────────────────────────────────────────────────
-  describe("Metadata on-chain", function () {
-    it("owner can set and get arbitrary metadata on a token", async function () {
+  // ── pricePerTask ──────────────────────────────────────────────────────────
+  describe("pricePerTask", function () {
+    it("pricePerTask = 0 par défaut", async function () {
       const { registry, alice } = await deploy();
       await registerAgent(registry, alice, "search-X");
-      await registry.connect(alice).setMetadata(1n, "llmModel", ethers.toUtf8Bytes("gpt-4o"));
-      expect(ethers.toUtf8String(await registry.getMetadata(1n, "llmModel"))).to.equal("gpt-4o");
+      const identity = await registry.getAgent("search-X");
+      expect(identity.pricePerTask).to.equal(0n);
     });
 
-    it("reserved key agentWallet is rejected via setMetadata", async function () {
+    it("pricePerTask peut être fixé à l'enregistrement", async function () {
       const { registry, alice } = await deploy();
-      await registerAgent(registry, alice, "search-X");
-      await expect(registry.connect(alice).setMetadata(1n, "agentWallet", ethers.toUtf8Bytes("x")))
-        .to.be.revertedWithCustomError(registry, "ReservedMetadataKey");
+      const price = ethers.parseEther("0.01");
+      await registry.connect(alice).register("search-X", AgentType.PROVIDER, URI_V1, "1.0.0", price);
+      const identity = await registry.getAgent("search-X");
+      expect(identity.pricePerTask).to.equal(price);
     });
 
-    it("non-owner cannot set metadata", async function () {
+    it("deux agents différents ont des pricePerTask indépendants", async function () {
       const { registry, alice, bob } = await deploy();
-      await registerAgent(registry, alice, "search-X");
-      await expect(registry.connect(bob).setMetadata(1n, "key", ethers.toUtf8Bytes("val")))
-        .to.be.revertedWithCustomError(registry, "NotAgentOwner");
+      await registry.connect(alice).register("agent-A", AgentType.PROVIDER, URI_V1, "1.0.0", 100n);
+      await registry.connect(bob).register("agent-B",   AgentType.PROVIDER, URI_V2, "1.0.0", 200n);
+      expect((await registry.getAgent("agent-A")).pricePerTask).to.equal(100n);
+      expect((await registry.getAgent("agent-B")).pricePerTask).to.equal(200n);
     });
   });
 

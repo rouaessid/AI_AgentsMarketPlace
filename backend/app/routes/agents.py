@@ -146,6 +146,37 @@ async def reset_store() -> JSONResponse:
     return JSONResponse({"message": "Store reset OK"})
 
 
+@router.post("/{agent_id}/recalculate-embedding", tags=["dev"])
+async def recalculate_embedding(agent_id: str) -> JSONResponse:
+    """
+    Re-fetch manifest from IPFS (via The Graph agentURI) and recalculate embedding.
+    Useful for agents registered directly on-chain (no backend submit() called).
+    """
+    import asyncio as _aio
+    from app.services.graph_client import get_agent as _get_graph_agent
+    from app.services.ipfs_service import IPFSService
+    from app.services.matching_service import embed_agent_capabilities
+
+    graph_agent = _get_graph_agent(agent_id)
+    if not graph_agent:
+        raise HTTPException(404, detail=f"Agent '{agent_id}' introuvable dans The Graph")
+
+    agent_uri = graph_agent.get("agentURI") or ""
+    if not agent_uri.startswith("ipfs://"):
+        raise HTTPException(400, detail=f"agentURI invalide ou absent pour '{agent_id}': {agent_uri!r}")
+
+    cid = agent_uri.removeprefix("ipfs://")
+    try:
+        manifest = await IPFSService().get(cid)
+    except FileNotFoundError:
+        raise HTTPException(404, detail=f"Manifest IPFS introuvable pour CID {cid}")
+
+    _aio.get_event_loop().run_in_executor(
+        None, lambda: embed_agent_capabilities(agent_id, manifest)
+    )
+    return JSONResponse({"agent_id": agent_id, "cid": cid, "message": "Recalcul embedding lancé"})
+
+
 @router.get("/{agent_id}/status")
 async def registration_status(agent_id: str) -> JSONResponse:
     """
@@ -236,6 +267,33 @@ async def new_version(agent_id: str, body: AgentNewVersionRequest) -> AgentNewVe
         return result
     except Exception as e:
         raise _http(e)
+
+
+@router.post("/{agent_id}/confirm-version")
+async def confirm_new_version(agent_id: str, body: dict) -> JSONResponse:
+    """
+    Frontend appelle cet endpoint après confirmation on-chain de mintNewVersion().
+    Recalcule l'embedding et upload le manifest '-confirmed' sur Pinata.
+    """
+    from app.services.agent_service import _records, _agent_index
+    from app.models.agent import AgentType as _AT
+    import asyncio as _aio
+
+    tx_hash  = body.get("tx_hash")
+    token_id = body.get("token_id")
+    logger.info("confirm-version %s — tx=%s tokenId=%s", agent_id, tx_hash, token_id)
+
+    rid    = _agent_index.get(agent_id)
+    record = _records.get(rid) if rid else None
+
+    if record and record.registration_file and record.agent_type != _AT.JUDGE:
+        from app.services.matching_service import embed_agent_capabilities
+        meta = record.registration_file.model_dump()
+        _aio.get_event_loop().run_in_executor(
+            None, lambda: embed_agent_capabilities(agent_id, meta)
+        )
+
+    return JSONResponse({"agent_id": agent_id, "token_id": token_id, "message": "Version confirmée — embedding en cours"})
 
 
 @router.get("/owner/{owner_address}")

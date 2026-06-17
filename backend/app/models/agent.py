@@ -147,6 +147,7 @@ class AgentOnChainConfirm(BaseModel):
     registration_id: str
     tx_hash:         str = Field(..., pattern=r"^0x[a-fA-F0-9]{64}$")
     token_id:        int | None = None
+    agent_id:        str | None = None   # fallback si backend redémarré entre submit et confirm
 
 
 class UnsignedTx(BaseModel):

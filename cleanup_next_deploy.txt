@@ -1,0 +1,261 @@
+
+
+
+----------retirer un agent----------------------
+
+1. IdentityRegistry.sol — ajouter :
+
+
+function deactivateAgent(string calldata agentId_) 
+    external agentExists(agentId_) onlyAgentOwner(agentId_) 
+{
+    _agents[agentId_].status = AgentStatus.REVOKED;
+    emit AgentStatusChanged(agentId_, AgentStatus.ACTIVE, AgentStatus.REVOKED);
+}
+2. Backend — endpoint POST /api/v1/agents/{agent_id}/deactivate :
+
+Vérifie que le wallet connecté est bien l'owner
+Construit la TX unsigned deactivateAgent()
+MetaMask signe
+Confirme → met le DB à revoked
+3. Frontend — bouton "Remove Agent" dans le seller dashboard :
+
+Signe deactivateAgent() via MetaMask
+Puis signe withdraw() sur StakingContract pour récupérer le stake
+Agent disparaît du marketplace
+
+(retirer agnet) 
+---------------------------------------
+. Pourquoi eligible=false — ont-ils perdu leur stake ?
+Non. Le stake est intact (0.005 ETH). Le problème c'est _judgeActiveTask[tokenId] — le contrat marque chaque juge comme "occupé sur une tâche". Tant que ce champ n'est pas vidé (par expireTask), le juge est bloqué même si son stake est là. C'est juste un flag interne, pas une question de stake.
+
+Auto-expire = une boucle de fond dans le backend qui tourne toutes les 10 minutes et libère automatiquement les juges bloqués — sans avoir à lancer un script manuellement.
+
+Le problème actuel :
+
+
+Tâche bloquée en COMMITTING → judges "occupés" pour toujours
+→ prochaine validation : NotEnoughEligibleJudges
+→ tu dois manuellement lancer un script pour débloquer
+Avec auto-expire :
+
+
+Tâche bloquée en COMMITTING → 10 min plus tard la boucle détecte
+→ appelle expireTask() automatiquement → judges libérés
+→ prochaine validation : fonctionne normalement
+
+Oui, tant que tous les juges partagent le même wallet, ce script sera utile à chaque fois qu'une validation échoue à mi-chemin.
+
+Lance-le d'abord, on voit si ça résout le problème. Ensuite on voit pour l'auto-expire si tu veux.
+
+
+npx hardhat run scripts/force_expire_judges.js --network baseSepolia
+
+Si tu enregistres chaque juge avec un wallet MetaMask différent :
+
+Le backend résout comme ça :
+
+assignJudges → récupère judgeWallet depuis IdentityRegistry (ton wallet MetaMask)
+Pour signer commitVote/revealVote → cherche la clé privée de ce wallet dans le .env
+
+# judge_service.py — _build_wallet_key_map()
+# Lit JUDGE_WALLET_KEYS dans .env : { "0xWALLET1": "clé1", "0xWALLET2": "clé2", ... }
+Donc oui, ça va prendre le bon wallet — à condition que tu mettes les clés privées dans le .env :
+
+
+JUDGE_WALLET_KEYS={"0xWallet_Alpha":"clé_privée_alpha","0xWallet_Beta":"clé_privée_beta","0xWallet_Gamma":"clé_privée_gamma","0xWallet_Delta":"clé_privée_delta","0xWallet_Epsilon":"clé_privée_epsilon"}
+Et ça résout le problème du wallet partagé :
+
+
+Avant (1 wallet) :
+  Alpha, Beta, Gamma, Delta, Epsilon → même 0xbb5385c0
+  1 task bloquée = tous bloqués
+
+Après (5 wallets) :
+  Alpha → 0xAAA...  Beta → 0xBBB...  Gamma → 0xCCC...
+  Delta → 0xDDD...  Epsilon → 0xEEE...
+  1 task bloquée = 3 juges bloqués, 2 encore disponibles ✓
+Pour faire ça :
+
+Crée 5 wallets MetaMask test (ou 5 comptes MetaMask)
+Envoie un peu de ETH Sepolia à chacun pour le gas + stake
+Enregistre chaque juge depuis le frontend avec son wallet MetaMask dédié
+Exporte les clés privées depuis MetaMask (Settings → Security → Export)
+Mets-les dans JUDGE_WALLET_KEYS dans le .env
+Veux-tu faire ça maintenant ou continuer avec le wallet actuel ?
+
+Ah, donc 2 tâches simultanées, chacune avec 3 juges différents.
+
+Avec wallet partagé, c'est impossible :
+
+
+Task 1 → juges 2, 5, 6 → lockStake(0xbb5385c0) 
+Task 2 → cherche 3 juges → tous ont 0xbb5385c0 → LOCKED → 0 éligibles ✗
+Mais même avec 5 wallets séparés, ça ne marche pas encore :
+
+
+Task 1 → juges alpha, beta, gamma  (3 wallets locked)
+Task 2 → cherche 3 juges → seulement delta + epsilon disponibles = 2 ✗
+         NotEnoughEligibleJudges(2, 3)
+Pour 2 tâches simultanées il faut minimum 6 juges avec 6 wallets séparés :
+
+
+Task 1 → juges 1, 2, 3 (locked)
+Task 2 → juges 4, 5, 6 (free) ✓
+
+les wallets
+Judge wallet  0xbB5385c0...  →  les 5 juges  →  stake 0.009 ETH
+Deployer wallet 0x04424Bd... →  le provider (researcher-01)  →  stake 0.005 ETH
+
+
+----
+
+URLs dans Key Findings — _itemText cherche d'abord les clés sémantiques (point, text, description, title…) avant d'accepter une URL. Les liens restent visibles dans le raw JSON mais ne s'affichent plus comme texte principal.
+
+Polling adaptatif — remplacé setInterval(2500) par setTimeout récursif : 3s quand la tâche est active (running/validating), 8s après 5 ticks sans changement. Beaucoup moins de requêtes inutiles.
+
+Cache loadActivePacks — résultat stocké en sessionStorage pendant 30 secondes. Le rechargement de page ou les re-renders React ne refont plus le call réseau immédiatement.
+
+Pour researcher-01 spécifiquement — c'est différent. Il n'a même pas le -v1.0.0. Cela signifie que submit() n'a jamais été appelé pour lui. Il a été enregistré directement sur la blockchain (script Hardhat ou appel contract direct) sans passer par le backend. Le backend n'a jamais été impliqué → jamais de Pinata → jamais d'embedding.
+
+Ce qui manque maintenant pour researcher-01 : il faut le supprimer de la blockchain et le re-enregistrer proprement via le formulaire frontend. Le flow complet passera par le backend → Pinata upload → embedding calculé.
+
+Ou si tu ne veux pas le supprimer (car c'est un SBT non transférable), tu peux utiliser l'endpoint qu'on vient d'ajouter — mais seulement si tu uploades d'abord son manifest manuellement sur Pinata avec le bon CID.
+
+
+
+---------------------
+
+Plan: Agent Slash → Revoke + Stake Display
+What's missing
+Slashing deducts stake but never changes AgentStatus — the two contracts aren't wired together
+Marketplace has no status filter — revoked agents stay visible
+My Agents shows no stake balance and no slash consequence UI
+Layer 1 — Smart Contracts (2 changes)
+A. IdentityRegistry.sol
+Add ValidationRegistry as an authorized caller of setAgentStatus() (currently onlyOwner).
+Add a modifier onlyAuthorizedOrOwner that allows both the contract owner AND the ValidationRegistry address.
+
+B. ValidationRegistry.sol — _applyOutcomes()
+After each slash call, immediately set status to REVOKED on IdentityRegistry:
+
+
+slashProvider(providerWallet)  →  identityRegistry.setAgentStatus(providerTokenId, REVOKED)
+slashJudge(judgeWallet)        →  identityRegistry.setAgentStatus(judgeTokenId, REVOKED)
+Same in expireTask() for absent judges.
+
+The AgentStatusChanged event is already indexed by the subgraph → status flows automatically to The Graph → backend picks it up.
+
+Layer 2 — Backend (2 changes)
+A. list_all() / marketplace endpoint
+Add a filter: exclude agents where status is REVOKED or SUSPENDED. The owner-facing endpoint (/agents/owner/{owner}) keeps all statuses visible (so they can see their revoked agents).
+
+B. /agents/owner/{owner} response
+Add stake_remaining (ETH, read live from StakingContract.getStake(wallet)) and min_stake (from contract constants) to each agent in the response.
+
+Layer 3 — Frontend: Marketplace
+In Marketplace.jsx filter step (line ~39), add:
+
+
+.filter(a => a.status === 'active')
+Revoked/suspended agents become invisible to buyers.
+
+Layer 4 — Frontend: My Agents (SellerDashboard — both roles)
+A. Status badge
+Each agent row shows a colored pill:
+
+active → green( déj exite ) 
+pending_* → yellow/gray (existing)
+suspended → orange
+revoked → red + label "Suspicious Agent"
+B. Stake display per agent
+Below each agent row (or in the expanded detail):
+
+
+Stake remaining:  0.00032 ETH  [▓▓░░░░]  min: 0.001 ETH
+Color logic:
+
+stake ≥ 2× minimum → green
+stake between 1× and 2× minimum → orange (warning)
+stake < minimum (or stake ≈ 0) → red, show warning "Stake insuffisant — agent bloqué"
+C. Global stake summary (top of dashboard)
+The current "Total Staked" card becomes "Stake restant" and uses red color if any agent is below threshold.
+
+Layer 5 — Subgraph (no change needed)
+Already indexes:
+
+AgentStatusChanged → agent.status
+Slashed → StakeEvent with reason
+Once Layer 1 is done, the subgraph picks up the AgentStatusChanged(REVOKED) event automatically.
+
+Execution order
+Smart contracts → redeploy (IdentityRegistry + ValidationRegistry)
+Backend /agents/owner → add stake_remaining
+Backend list_all → add status filter
+Frontend Marketplace → add status === 'active' filter
+Frontend SellerDashboard → status badge + stake bar per agent
+
+
+
+------------------
+
+
+Non — le marketplace ne lit pas directement on-chain.
+
+La chaîne réelle est :
+
+
+On-chain (IdentityRegistry)
+    ↓ indexé par The Graph (async)
+    ↓ lu par backend lors de confirm() ou /status polling
+_records en mémoire (mis à jour par confirm() + honeypot)
+    ↓ persiste dans DB
+    ↓ rechargé au redémarrage
+Marketplace lit _records
+Le vrai problème : si on-chain change (setAgentStatus(SUSPENDED)) sans passer par le backend, le marketplace n'en sait rien — il continue d'afficher active.
+
+Ce qui manque : un listener ou sync périodique depuis The Graph vers DB pour les changements de statut on-chain. Actuellement :
+
+confirm() → sync une seule fois
+/status polling → sync lazy pour pending_index seulement
+Changements admin on-chain (SUSPENDED/REVOKED) → jamais synchronisés automatiquement
+C'est une vraie lacune d'architecture pour la prod. Pour les diagrammes on note ça ou on laisse ?
+
+
+------
+
+Ce qui devrait exister :
+
+Champ	PROVIDER	JUGE
+status	active	active ← toujours
+judge_validation_status	—	pending / authorized / failed
+Changements code nécessaires :
+
+AgentRecord : ajouter champ judge_validation_status
+confirm() : JUGE → status = ACTIVE + judge_validation_status = pending
+Honeypot service : mettre à jour judge_validation_status (pas status)
+DB : colonne judge_validation_status
+list_all : filtre status == ACTIVE → juges aussi inclus ? Non — My Agents seulement
+Frontend : lire judge_validation_status pour le badge
+
+status principal — tous agents :
+
+Valeur	Reste ?
+active	✓
+suspended	✓
+revoked	✓
+pending_signature	✓
+pending_index	✓
+pending_validation	✗ → déplacer vers judge_validation_status
+validation_failed	✗ → déplacer vers judge_validation_status
+Nouveau judge_validation_status — JUGE uniquement :
+
+Valeur	Signification
+pending	test en cours
+authorized	test passé — judgeAuthorized = true
+failed	test échoué — judgeAuthorized = false
+Résumé changements :
+
+Supprimer PENDING_VALIDATION et VALIDATION_FAILED de AgentStatus
+Créer JudgeValidationStatus enum
+Ajouter judge_validation_status dans AgentRecord et DB

@@ -62,6 +62,10 @@ export const agentApi = {
   newVersion: (agentId, body) =>
     fetchJSON(`${BASE}/${agentId}/version`, { method: 'POST', body: JSON.stringify(body) }),
 
+  // Notifie le backend que mintNewVersion() est confirmé → recalcule embedding
+  confirmVersion: (agentId, body) =>
+    fetchJSON(`${BASE}/${agentId}/confirm-version`, { method: 'POST', body: JSON.stringify(body) }),
+
   run: (agentId, body, buyerWallet = null, runId = null) => {
     let url = `${BASE}/${agentId}/run`
     if (runId) url += `?run_id=${runId}`

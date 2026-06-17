@@ -321,6 +321,16 @@ function NewVersionModal({ agent, onClose }) {
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
+  async function waitForReceipt(hash, maxRetries = 40) {
+    for (let i = 0; i < maxRetries; i++) {
+      await new Promise(r => setTimeout(r, 2000))
+      const receipt = await window.ethereum.request({ method: 'eth_getTransactionReceipt', params: [hash] })
+      if (receipt?.status === '0x1') return receipt
+      if (receipt?.status === '0x0') throw new Error('Transaction revertée on-chain')
+    }
+    throw new Error('Transaction non confirmée après 80s')
+  }
+
   async function submit() {
     if (!form.new_version)  return setError('Version requise (ex: 2.0.0)')
     if (!/^\d+\.\d+\.\d+$/.test(form.new_version)) return setError('Format invalide — ex: 2.0.0')
@@ -339,10 +349,7 @@ function NewVersionModal({ agent, onClose }) {
       // Step 2 — Switch to Base Sepolia and sign mintNewVersion() with MetaMask
       if (res.unsigned_tx?.data) {
         try {
-          await window.ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: '0x14A34' }],
-          })
+          await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x14A34' }] })
         } catch (sw) {
           if (sw.code === 4902) {
             await window.ethereum.request({
@@ -361,9 +368,24 @@ function NewVersionModal({ agent, onClose }) {
           method: 'eth_sendTransaction',
           params: [{ from, to: res.unsigned_tx.contract_address, data: res.unsigned_tx.data, gas: gasHex }],
         })
-        setTxHash(txHash)
 
-        // Pour les juges — le test technique est déclenché automatiquement par le backend (new-version endpoint)
+        // Step 3 — Wait for receipt and parse newTokenId from AgentVersionMinted (topics[1])
+        const receipt = await waitForReceipt(txHash)
+        let tokenId = null
+        for (const log of (receipt?.logs || [])) {
+          if (
+            log.address?.toLowerCase() === res.unsigned_tx.contract_address?.toLowerCase() &&
+            log.topics?.length >= 2
+          ) {
+            tokenId = parseInt(log.topics[1], 16)
+            break
+          }
+        }
+
+        // Step 4 — Notify backend (recalcule embedding pour providers)
+        await agentApi.confirmVersion(agent.agent_id, { tx_hash: txHash, token_id: tokenId }).catch(() => {})
+
+        setTxHash(txHash)
       } else {
         setTxHash(res.tx_hash || 'submitted')
       }
